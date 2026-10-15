@@ -1,9 +1,29 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
+import { connection } from 'next/server'
 import FeedHeader from '@/components/FeedHeader'
 import PostCard from '@/components/PostCard'
 
+export const instant = false
+
+type BadgeColor = 'cyan' | 'pink' | 'yellow' | 'green'
+
+type Post = {
+  id: string
+  author_name: string
+  author_avatar: string | null
+  created_at: string
+  image_url: string | null
+  caption: string
+  likes: number
+  comments: number
+  badge?: string
+  badge_color?: BadgeColor
+}
+
 export default async function HomePage() {
+  await connection()
+
   const supabase = await createClient()
 
   const {
@@ -20,12 +40,14 @@ export default async function HomePage() {
     .eq('id', user.id)
     .single()
 
-  const placeholderPosts = [
+  const now = Date.now()
+
+  const placeholderPosts: Post[] = [
     {
       id: '1',
       author_name: 'Play Zone Admin',
       author_avatar: null,
-      created_at: new Date().toISOString(),
+      created_at: new Date(now).toISOString(),
       image_url: null,
       badge: 'NEW',
       badge_color: 'cyan',
@@ -37,7 +59,7 @@ export default async function HomePage() {
       id: '2',
       author_name: 'Play Zone Admin',
       author_avatar: null,
-      created_at: new Date(Date.now() - 3600000).toISOString(),
+      created_at: new Date(now - 3600000).toISOString(),
       image_url: null,
       badge: 'TOURNAMENT',
       badge_color: 'pink',
@@ -49,7 +71,7 @@ export default async function HomePage() {
       id: '3',
       author_name: 'Play Zone Admin',
       author_avatar: null,
-      created_at: new Date(Date.now() - 86400000).toISOString(),
+      created_at: new Date(now - 86400000).toISOString(),
       image_url: null,
       badge: 'OFFER',
       badge_color: 'yellow',
@@ -61,7 +83,6 @@ export default async function HomePage() {
 
   return (
     <div className="min-h-screen bg-[#0a0a0f] text-white relative">
-      {/* Background Grid Pattern */}
       <div
         className="fixed inset-0 opacity-[0.03] pointer-events-none"
         style={{
@@ -71,7 +92,6 @@ export default async function HomePage() {
         }}
       ></div>
 
-      {/* Background Glow */}
       <div className="fixed top-0 left-1/4 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none"></div>
       <div className="fixed bottom-0 right-1/4 w-96 h-96 bg-pink-500/10 rounded-full blur-3xl pointer-events-none"></div>
 
@@ -79,7 +99,6 @@ export default async function HomePage() {
         <FeedHeader profile={profile} />
 
         <main className="w-full max-w-2xl mx-auto px-3 sm:px-4 md:px-6 py-4 sm:py-6 pb-24">
-          {/* Page Title */}
           <div className="mb-5 sm:mb-6">
             <div className="flex items-center gap-3">
               <h2 className="text-2xl sm:text-3xl md:text-4xl font-black tracking-wider bg-gradient-to-r from-cyan-400 to-pink-500 bg-clip-text text-transparent">
@@ -92,7 +111,6 @@ export default async function HomePage() {
             </p>
           </div>
 
-          {/* Posts */}
           <div className="space-y-4 sm:space-y-6">
             {placeholderPosts.map((post) => (
               <PostCard key={post.id} post={post} />
