@@ -1,7 +1,12 @@
 @import "tailwindcss";
 
 @theme {
-  --font-orbitron: var(--font-orbitron);
+  --font-orbitron: var(--font-orbitron), sans-serif;
+}
+
+html,
+body {
+  font-family: var(--font-orbitron), sans-serif;
 }
 
 * {

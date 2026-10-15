@@ -1,11 +1,12 @@
 import type { Metadata } from 'next'
-import { Orbitron } from 'next/font/google'
+import { Chakra_Petch } from 'next/font/google'
 import './globals.css'
 
-const orbitron = Orbitron({
+const font = Chakra_Petch({
   subsets: ['latin'],
   variable: '--font-orbitron',
-  weight: ['400', '500', '600', '700', '800', '900'],
+  weight: ['300', '400', '500', '600', '700'],
+  display: 'swap',
 })
 
 export const metadata: Metadata = {
@@ -19,7 +20,7 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="en" className={orbitron.variable}>
+    <html lang="en" className={font.variable}>
       <body>{children}</body>
     </html>
   )
