@@ -1,10 +1,10 @@
 // app/playzonemama/reports/page.tsx
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { formatINR } from '@/lib/utils/money'
-import { formatDateShort, formatDateTime, formatTime } from '@/lib/utils/time'
+import { formatDateShort } from '@/lib/utils/time'
 import { todayIST, addDaysIST } from '@/lib/utils/time'
 
 type ReportKey =
@@ -86,7 +86,6 @@ export default function ReportsPage() {
   }
 
   const loadCashReport = async (supabase: any, startIso: string, endIso: string) => {
-    // Recharges approved (cash in)
     const { data: rchs } = await supabase
       .from('recharge_requests')
       .select('amount, reviewed_at')
@@ -94,7 +93,6 @@ export default function ReportsPage() {
       .gte('reviewed_at', startIso)
       .lt('reviewed_at', endIso)
 
-    // Refunds paid (cash out: booking_cancel, booking_reschedule_out, refund)
     const { data: outs } = await supabase
       .from('wallet_transactions')
       .select('amount, source, created_at, reason_short')
@@ -102,7 +100,6 @@ export default function ReportsPage() {
       .gte('created_at', startIso)
       .lt('created_at', endIso)
 
-    // Wallet-only: booking_confirm, extra_time, overrun, booking_reschedule_in
     const { data: internal } = await supabase
       .from('wallet_transactions')
       .select('amount, source, created_at')
@@ -110,14 +107,12 @@ export default function ReportsPage() {
       .gte('created_at', startIso)
       .lt('created_at', endIso)
 
-    // Fees retained
     const { data: bookingFees } = await supabase
       .from('bookings')
       .select('cancellation_fee, reschedule_fee, updated_at')
       .gte('updated_at', startIso)
       .lt('updated_at', endIso)
 
-    // UPI breakdown
     const { data: rchsWithApp } = await supabase
       .from('recharge_requests')
       .select('amount, upi_app')
@@ -125,11 +120,11 @@ export default function ReportsPage() {
       .gte('reviewed_at', startIso)
       .lt('reviewed_at', endIso)
 
-    const cashIn = sum(rchs, 'amount')
-    const cashOut = sum(outs, 'amount')
+    const cashIn = sum((rchs ?? []) as any[], 'amount')
+    const cashOut = sum((outs ?? []) as any[], 'amount')
 
     const upiBreakdown: Record<string, { total: number; count: number }> = {}
-    for (const r of rchsWithApp ?? []) {
+    for (const r of (rchsWithApp ?? []) as any[]) {
       const app = r.upi_app || 'Other'
       const cur = upiBreakdown[app] ?? { total: 0, count: 0 }
       cur.total += Number(r.amount)
@@ -137,20 +132,27 @@ export default function ReportsPage() {
       upiBreakdown[app] = cur
     }
 
-    const cancellationsFees = sum((bookingFees ?? []).map((b: any) => ({ cancellation_fee: b.cancellation_fee })), 'cancellation_fee')
-    const rescheduleFees = sum((bookingFees ?? []).map((b: any) => ({ reschedule_fee: b.reschedule_fee })), 'reschedule_fee')
+    const cancellationsFees = sum(
+      ((bookingFees ?? []) as any[]).map((b) => ({ cancellation_fee: b.cancellation_fee })),
+      'cancellation_fee'
+    )
+    const rescheduleFees = sum(
+      ((bookingFees ?? []) as any[]).map((b) => ({ reschedule_fee: b.reschedule_fee })),
+      'reschedule_fee'
+    )
 
-    const bookingCount = (internal ?? []).filter((x: any) => x.source === 'booking_confirm').length
-    const extraTimeCount = (internal ?? []).filter((x: any) => x.source === 'extra_time').length
+    const internalRows = (internal ?? []) as any[]
+    const bookingCount = internalRows.filter((x) => x.source === 'booking_confirm').length
+    const extraTimeCount = internalRows.filter((x) => x.source === 'extra_time').length
 
     setData({
       cashIn, cashOut, net: cashIn - cashOut,
       recharges: { total: cashIn, count: (rchs ?? []).length },
       refunds: { total: cashOut, count: (outs ?? []).length },
       internal: {
-        bookings: sum((internal ?? []).filter((x: any) => x.source === 'booking_confirm'), 'amount'),
+        bookings: sum(internalRows.filter((x) => x.source === 'booking_confirm'), 'amount'),
         bookingCount,
-        extraTime: sum((internal ?? []).filter((x: any) => x.source === 'extra_time'), 'amount'),
+        extraTime: sum(internalRows.filter((x) => x.source === 'extra_time'), 'amount'),
         extraTimeCount,
       },
       fees: {
@@ -171,8 +173,8 @@ export default function ReportsPage() {
       .lt('slot_start', endIso)
 
     const byConsole: Record<string, { name: string; type: string; total: number; count: number }> = {}
-    for (const b of data ?? []) {
-      const c = (b as any).console
+    for (const b of (data ?? []) as any[]) {
+      const c = b.console
       if (!c) continue
       const key = c.name
       const cur = byConsole[key] ?? { name: c.name, type: c.type, total: 0, count: 0 }
@@ -192,8 +194,8 @@ export default function ReportsPage() {
       .lt('slot_start', endIso)
 
     const byGame: Record<string, { name: string; category: string; total: number; count: number }> = {}
-    for (const b of data ?? []) {
-      const g = (b as any).game
+    for (const b of (data ?? []) as any[]) {
+      const g = b.game
       if (!g) continue
       const key = g.name
       const cur = byGame[key] ?? { name: g.name, category: g.category, total: 0, count: 0 }
@@ -217,14 +219,15 @@ export default function ReportsPage() {
       .lt('slot_start', endIso)
       .order('slot_start', { ascending: false })
 
-    const counts = { total: data?.length ?? 0, completed: 0, cancelled: 0, no_show: 0, rescheduled: 0 }
-    for (const b of data ?? []) {
+    const rows = (data ?? []) as any[]
+    const counts = { total: rows.length, completed: 0, cancelled: 0, no_show: 0, rescheduled: 0 }
+    for (const b of rows) {
       if (b.status === 'completed') counts.completed++
       else if (b.status === 'cancelled') counts.cancelled++
       else if (b.status === 'no_show') counts.no_show++
       else if (b.status === 'rescheduled') counts.rescheduled++
     }
-    setData({ rows: data ?? [], counts })
+    setData({ rows, counts })
   }
 
   const loadCancels = async (supabase: any, startIso: string, endIso: string) => {
@@ -241,11 +244,12 @@ export default function ReportsPage() {
       .lt('cancelled_at', endIso)
       .order('cancelled_at', { ascending: false })
 
-    const cancels = (data ?? []).filter((b: any) => b.status === 'cancelled')
-    const resches = (data ?? []).filter((b: any) => b.status === 'rescheduled')
+    const rows = (data ?? []) as any[]
+    const cancels = rows.filter((b) => b.status === 'cancelled')
+    const resches = rows.filter((b) => b.status === 'rescheduled')
 
     setData({
-      rows: data ?? [],
+      rows,
       cancels: {
         count: cancels.length,
         fees: sum(cancels, 'cancellation_fee'),
@@ -270,11 +274,12 @@ export default function ReportsPage() {
       .lt('created_at', endIso)
       .order('created_at', { ascending: false })
 
-    const credits = (data ?? []).filter((t: any) => t.type === 'credit')
-    const debits = (data ?? []).filter((t: any) => t.type === 'debit')
+    const rows = (data ?? []) as any[]
+    const credits = rows.filter((t) => t.type === 'credit')
+    const debits = rows.filter((t) => t.type === 'debit')
 
     setData({
-      rows: data ?? [],
+      rows,
       totals: {
         credit: sum(credits, 'amount'),
         debit: sum(debits, 'amount'),
@@ -292,9 +297,10 @@ export default function ReportsPage() {
       .lt('created_at', endIso)
       .order('created_at', { ascending: false })
 
-    const approved = (data ?? []).filter((r: any) => r.status === 'approved')
-    const pending = (data ?? []).filter((r: any) => r.status === 'pending')
-    const rejected = (data ?? []).filter((r: any) => r.status === 'rejected')
+    const rows = (data ?? []) as any[]
+    const approved = rows.filter((r) => r.status === 'approved')
+    const pending = rows.filter((r) => r.status === 'pending')
+    const rejected = rows.filter((r) => r.status === 'rejected')
 
     const byApp: Record<string, { total: number; count: number }> = {}
     for (const r of approved) {
@@ -310,7 +316,7 @@ export default function ReportsPage() {
       pending: { count: pending.length, total: sum(pending, 'amount') },
       rejected: { count: rejected.length },
       byApp,
-      rows: data ?? [],
+      rows,
     })
   }
 
@@ -325,11 +331,12 @@ export default function ReportsPage() {
       .lt('started_at', endIso)
       .order('started_at', { ascending: false })
 
+    const rows = (data ?? []) as any[]
     const byConsole: Record<string, { name: string; count: number; cost: number; days: number }> = {}
     const byReason: Record<string, { name: string; count: number; cost: number }> = {}
 
-    for (const m of data ?? []) {
-      const cname = (m as any).console?.name ?? '?'
+    for (const m of rows) {
+      const cname = m.console?.name ?? '?'
       const cc = byConsole[cname] ?? { name: cname, count: 0, cost: 0, days: 0 }
       cc.count++
       cc.cost += Number(m.cost)
@@ -346,9 +353,9 @@ export default function ReportsPage() {
     }
 
     setData({
-      rows: data ?? [],
-      totalCost: sum(data ?? [], 'cost'),
-      totalCount: (data ?? []).length,
+      rows,
+      totalCost: sum(rows, 'cost'),
+      totalCount: rows.length,
       byConsole: Object.values(byConsole).sort((a, b) => b.count - a.count),
       byReason: Object.values(byReason).sort((a, b) => b.count - a.count),
     })
@@ -367,7 +374,7 @@ export default function ReportsPage() {
       .in('status', ['confirmed', 'active', 'completed'])
 
     const bookingStats: Record<string, { count: number; spend: number; last: string | null }> = {}
-    for (const b of bookings ?? []) {
+    for (const b of ((bookings ?? []) as any[])) {
       const cur = bookingStats[b.user_id] ?? { count: 0, spend: 0, last: null }
       cur.count++
       cur.spend += Number(b.amount)
@@ -375,7 +382,7 @@ export default function ReportsPage() {
       bookingStats[b.user_id] = cur
     }
 
-    const rows = (customers ?? []).map((c: any) => ({
+    const rows = ((customers ?? []) as any[]).map((c) => ({
       ...c,
       bookings: bookingStats[c.id]?.count ?? 0,
       spend: bookingStats[c.id]?.spend ?? 0,
@@ -426,7 +433,6 @@ export default function ReportsPage() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-[200px_1fr] gap-4">
-        {/* Sidebar */}
         <aside className="flex md:flex-col gap-2 overflow-x-auto md:overflow-visible pb-1 md:pb-0">
           {REPORTS.map((r) => (
             <button
@@ -444,7 +450,6 @@ export default function ReportsPage() {
           ))}
         </aside>
 
-        {/* Content */}
         <div className="space-y-4">
           {active !== 'customers' && (
             <div className="flex gap-2 items-center flex-wrap">
@@ -568,11 +573,11 @@ function SummaryView({ data, label }: { data: any; label: string }) {
 
 function SimpleList({ rows, labelKey, subKey }: { rows: any[]; labelKey: string; subKey: string }) {
   if (!rows?.length) return <Empty title="No data in this range" />
-  const total = rows.reduce((s, r) => s + r.total, 0)
+  const total = rows.reduce((s: number, r: any) => s + Number(r.total || 0), 0)
   return (
     <div className="space-y-2">
-      {rows.map((r) => (
-        <div key={r[labelKey]} className="rounded-xl border border-cyan-500/10 bg-[#12121a] p-3 flex justify-between items-center">
+      {rows.map((r: any, i: number) => (
+        <div key={`${r[labelKey]}-${i}`} className="rounded-xl border border-cyan-500/10 bg-[#12121a] p-3 flex justify-between items-center">
           <div>
             <div className="text-sm text-white font-bold">{r[labelKey]}</div>
             <div className="text-[11px] text-gray-500">
@@ -842,7 +847,7 @@ function Empty({ title }: { title: string }) {
 
 function rangeFor(report: ReportKey, date: string): { start: Date; end: Date } {
   const [y, m, d] = date.split('-').map(Number)
-  const startIST = new Date(Date.UTC(y, m - 1, d) - 5.5 * 3600000) // start of day IST
+  const startIST = new Date(Date.UTC(y, m - 1, d) - 5.5 * 3600000)
 
   let days = 1
   if (report === 'weekly') days = 7
@@ -853,5 +858,5 @@ function rangeFor(report: ReportKey, date: string): { start: Date; end: Date } {
 }
 
 function sum(rows: any[] = [], key: string): number {
-  return rows.reduce((s, r) => s + Number(r[key] || 0), 0)
+  return rows.reduce((s: number, r: any) => s + Number(r[key] || 0), 0)
 }
