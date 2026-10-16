@@ -22,7 +22,7 @@ const SECTIONS: SectionDef[] = [
   {
     title: 'Zone',
     icon: '🏢',
-    keys: ['zone_name', 'zone_upi_id', 'zone_phone'],
+    keys: ['zone_name', 'zone_upi_id', 'zone_payee_name', 'zone_phone'],
   },
   {
     title: 'Hours & Slots',
@@ -62,6 +62,7 @@ const SECTIONS: SectionDef[] = [
 const LABELS: Record<string, string> = {
   zone_name: 'Zone Name',
   zone_upi_id: 'UPI ID',
+  zone_payee_name: 'Payee Name',         // ✅ NEW
   zone_phone: 'Contact Phone',
   open_hour: 'Open Hour (24h)',
   close_hour: 'Close Hour (24h)',
@@ -152,7 +153,6 @@ function SettingRow({
 }) {
   const [draft, setDraft] = useState(value);
 
-  // Infer editor type from current value
   const type =
     typeof value === 'boolean' ? 'boolean'
     : typeof value === 'number' ? 'number'

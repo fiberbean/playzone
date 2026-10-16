@@ -232,10 +232,12 @@ export function WalletClient({
       </main>
 
       <RechargeModal
-        open={rechargeOpen}
-        onClose={() => setRechargeOpen(false)}
-        upiId={settings.zone_upi_id}
-      />
+  open={rechargeOpen}
+  onClose={() => setRechargeOpen(false)}
+  upiId={settings.zone_upi_id}
+  payeeName={settings.zone_payee_name}
+  zonePhone={settings.zone_phone}
+/>
 
       {selectedTxn && (
         <TxnDrawer txn={selectedTxn} onClose={() => setSelectedTxn(null)} />

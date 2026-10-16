@@ -38,9 +38,14 @@ export async function updateSetting(key: string, value: unknown) {
 export async function getAllSettings() {
   const supabase = await createClient();
   const { data } = await supabase.from('settings').select('key, value');
-  const map = { ...POLICY_DEFAULTS } as Record<string, unknown>;
+
+  // ✅ Start with POLICY_DEFAULTS (fallback)
+  const map = { ...POLICY_DEFAULTS } as Record<string, unknown>
+
+  // ✅ Copy ALL keys from DB (not just POLICY_DEFAULTS ones)
   for (const row of data ?? []) {
-    if (row.key in POLICY_DEFAULTS) map[row.key] = row.value;
+    map[row.key] = row.value
   }
-  return map;
+
+  return map
 }
