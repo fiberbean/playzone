@@ -53,7 +53,7 @@ export default function PostCard({
   useEffect(() => {
     const supabase = createClient()
     const channel = supabase
-      .channel(`likes-${post.id}`)
+      .channel(`likes-${post.id}-${Math.random().toString(36).slice(2)}`)
       .on(
         'postgres_changes',
         {

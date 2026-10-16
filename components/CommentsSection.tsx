@@ -85,7 +85,7 @@ export default function CommentsSection({
 
     const supabase = createClient()
     const channel = supabase
-      .channel(`comments-${postId}`)
+      .channel(`comments-${postId}-${Math.random().toString(36).slice(2)}`)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'comments', filter: `post_id=eq.${postId}` },

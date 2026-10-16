@@ -1,13 +1,12 @@
 // app/playzonemama/live/page.tsx
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { formatTime } from '@/lib/utils/time'
 import { formatINR } from '@/lib/utils/money'
 import { ConfirmActionModal } from '@/components/ui/ConfirmActionModal'
-import { toast } from '@/components/ui/Toast'
-import { playChime } from '@/components/ui/Toast'
+import { toast, playChime } from '@/components/ui/Toast'
 import { endSession } from '@/lib/actions/bookings'
 import { computeOverrun } from '@/lib/actions/live'
 import { useSettings } from '@/lib/hooks/useSettings'
@@ -55,7 +54,7 @@ export default function LivePage() {
     fetchLive()
     const supabase = createClient()
     const channel = supabase
-      .channel('live-sessions')
+      .channel(`live-sessions-${Math.random().toString(36).slice(2)}`)
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'bookings' },
         () => fetchLive()
@@ -158,7 +157,7 @@ export default function LivePage() {
           breakdown={
             modal.charge > 0
               ? [
-                  { label: 'Overrun', value: modal.overrunMin, bold: false } as any,
+                  { label: 'Overrun (min)', value: modal.overrunMin },
                   { label: 'Extra charge', value: modal.charge, highlight: 'red', bold: true },
                 ]
               : [{ label: 'Extra charge', value: 0 }]
@@ -185,9 +184,10 @@ function LiveCard({
   graceMin: number
   onEnd: () => void
 }) {
-  const [now, setNow] = useState(() => Date.now())
+  const [now, setNow] = useState(0)
 
   useEffect(() => {
+    setNow(Date.now())
     const t = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(t)
   }, [])
@@ -207,7 +207,7 @@ function LiveCard({
     if ([10, 5, 2].includes(rem) && remainingSec === 0) {
       playChime(rem <= 2)
       toast.urgent(
-        rem <= 2 ? `🚨 ${rem} min left` : `⏱ ${rem} min left`,
+        rem <= 2 ? `${rem} min left` : `${rem} min left`,
         `${row.console?.name} • ${row.game?.name}`,
         rem <= 2
       )
@@ -236,7 +236,7 @@ function LiveCard({
             {row.console?.name} • {row.game?.name}
           </div>
           <div className="text-xs text-gray-400">
-            👤 {row.profile?.full_name ?? row.profile?.email ?? 'Unknown'}
+            {row.profile?.full_name ?? row.profile?.email ?? 'Unknown'}
           </div>
           <div className="text-xs text-gray-500 mt-0.5">
             {formatTime(row.slot_start)} – {formatTime(row.slot_end)}
@@ -267,7 +267,7 @@ function LiveCard({
         onClick={onEnd}
         className="w-full py-2 rounded-lg bg-amber-600/90 hover:bg-amber-600 text-white text-sm font-bold"
       >
-        ⏹ End Session
+        End Session
       </button>
     </div>
   )

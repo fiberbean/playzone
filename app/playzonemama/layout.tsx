@@ -1,6 +1,9 @@
+// app/playzonemama/layout.tsx
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
+import { AdminSidebar } from './AdminSidebar'
+import { AdminBottomNav } from './AdminBottomNav'
 
 export default async function AdminLayout({
   children,
@@ -29,84 +32,57 @@ export default async function AdminLayout({
 
   return (
     <div className="min-h-screen bg-[#0a0a0f] text-white">
-      {/* Header */}
-      <header className="sticky top-0 z-40 bg-[#0a0a0f]/90 backdrop-blur-xl border-b border-cyan-500/20">
-        <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2">
-            <div className="w-9 h-9 bg-gradient-to-br from-cyan-400 to-pink-500 rounded-lg flex items-center justify-center shadow-lg shadow-cyan-500/30">
-              <span className="text-lg">⚡</span>
-            </div>
-            <div className="hidden sm:block">
-              <h1 className="text-base font-black tracking-wider bg-gradient-to-r from-cyan-400 to-pink-500 bg-clip-text text-transparent leading-none">
-                PLAY ZONE
-              </h1>
-              <p className="text-[10px] text-cyan-400 tracking-widest font-bold">
-                ADMIN PANEL
-              </p>
-            </div>
-          </Link>
+      {/* ============ DESKTOP: Sidebar layout ============ */}
+      <div className="hidden lg:flex min-h-screen">
+        <AdminSidebar profile={profile} />
+        <main className="flex-1 min-w-0 px-6 py-6 max-w-7xl mx-auto">
+          {children}
+        </main>
+      </div>
 
-          <div className="flex items-center gap-3">
-            <Link
-              href="/"
-              className="text-xs sm:text-sm text-gray-400 hover:text-cyan-400 transition px-3 py-2 rounded-lg hover:bg-cyan-500/10"
-            >
-              ← Feed
+      {/* ============ MOBILE: Header + content + bottom nav ============ */}
+      <div className="lg:hidden pb-24">
+        {/* Header */}
+        <header className="sticky top-0 z-40 bg-[#0a0a0f]/90 backdrop-blur-xl border-b border-cyan-500/20">
+          <div className="px-4 py-3 flex items-center justify-between">
+            <Link href="/playzonemama" className="flex items-center gap-2">
+              <div className="w-9 h-9 bg-gradient-to-br from-cyan-400 to-pink-500 rounded-lg flex items-center justify-center shadow-lg shadow-cyan-500/30">
+                <span className="text-lg">⚡</span>
+              </div>
+              <div>
+                <h1 className="text-sm font-black tracking-wider bg-gradient-to-r from-cyan-400 to-pink-500 bg-clip-text text-transparent leading-none">
+                  PLAY ZONE
+                </h1>
+                <p className="text-[9px] text-cyan-400 tracking-widest font-bold mt-0.5">
+                  ADMIN PANEL
+                </p>
+              </div>
             </Link>
-            {profile?.avatar_url && (
-              <img
-                src={profile.avatar_url}
-                alt="admin"
-                className="w-8 h-8 rounded-full border-2 border-cyan-500/50"
-              />
-            )}
+
+            <div className="flex items-center gap-2">
+              <Link
+                href="/"
+                className="text-[10px] font-bold text-gray-400 hover:text-cyan-400 transition px-2 py-1.5 rounded-lg hover:bg-cyan-500/10 tracking-wider"
+              >
+                FEED
+              </Link>
+              {profile?.avatar_url && (
+                <img
+                  src={profile.avatar_url}
+                  alt="admin"
+                  className="w-8 h-8 rounded-full border-2 border-cyan-500/50"
+                />
+              )}
+            </div>
           </div>
-        </div>
-      </header>
+        </header>
 
-      {/* Nav Tabs */}
-      <nav className="border-b border-cyan-500/10 bg-[#0a0a0f]/50 sticky top-[57px] z-30 backdrop-blur-xl">
-        <div className="max-w-5xl mx-auto px-4 flex gap-1 overflow-x-auto">
-          <AdminNavLink href="/playzonemama" label="Dashboard" icon="📊" />
-          <AdminNavLink href="/playzonemama/live" label="Live" icon="🔴" />
-          <AdminNavLink href="/playzonemama/bookings" label="Bookings" icon="📅" />
-          <AdminNavLink href="/playzonemama/scan" label="Scan" icon="📷" />
-          <AdminNavLink href="/playzonemama/wallet" label="Wallet" icon="💰" />
-          <AdminNavLink href="/playzonemama/reports" label="Reports" icon="📈" />
-          <AdminNavLink href="/playzonemama/maintenance" label="Maintenance" icon="🔧" />
-          <span className="w-px bg-cyan-500/20 my-2 mx-1 shrink-0" />
-          <AdminNavLink href="/playzonemama/consoles" label="Consoles" icon="🎮" />
-          <AdminNavLink href="/playzonemama/games" label="Games" icon="🎯" />
-          <AdminNavLink href="/playzonemama/mapping" label="Mapping" icon="🔗" />
-          <span className="w-px bg-cyan-500/20 my-2 mx-1 shrink-0" />
-          <AdminNavLink href="/playzonemama/new-post" label="New Post" icon="✍️" />
-          <AdminNavLink href="/playzonemama/posts" label="Posts" icon="📝" />
-          <AdminNavLink href="/playzonemama/settings" label="Settings" icon="⚙️" />
-        </div>
-      </nav>
+        {/* Content */}
+        <main className="px-4 py-6">{children}</main>
 
-      {/* Content */}
-      <main className="max-w-5xl mx-auto px-4 py-6">{children}</main>
+        {/* Bottom nav */}
+        <AdminBottomNav />
+      </div>
     </div>
-  )
-}
-
-function AdminNavLink({
-  href,
-  label,
-  icon,
-}: {
-  href: string
-  label: string
-  icon: string
-}) {
-  return (
-    <Link
-      href={href}
-      className="flex items-center gap-2 px-4 py-3 text-xs sm:text-sm font-bold text-gray-400 hover:text-cyan-400 border-b-2 border-transparent hover:border-cyan-400 transition whitespace-nowrap"
-    >
-      <span>{icon}</span>
-      <span>{label}</span>
-    </Link>
   )
 }

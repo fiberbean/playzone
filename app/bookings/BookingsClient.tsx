@@ -58,11 +58,11 @@ interface Props {
 export function BookingsClient({ bookings, settings, walletBalance, timeCredit }: Props) {
   const [tab, setTab] = useState<Tab>('upcoming')
   const [local, setLocal] = useState(bookings)
-  const [now, setNow] = useState(() => Date.now())
+  const [now, setNow] = useState(0)
 
   // Update clock every 30s so time-based actions re-evaluate
   useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 30000)
+    setNow(Date.now())`n    const t = setInterval(() => setNow(Date.now()), 30000)
     return () => clearInterval(t)
   }, [])
 
@@ -70,7 +70,7 @@ export function BookingsClient({ bookings, settings, walletBalance, timeCredit }
   useEffect(() => {
     const supabase = createClient()
     const channel = supabase
-      .channel('customer-bookings')
+      .channel(`customer-bookings-${Math.random().toString(36).slice(2)}`)
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'bookings', filter: `user_id=eq.${bookings[0]?.user_id ?? ''}` },
         async () => {
@@ -417,10 +417,10 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 function ActiveSessionTimer({ slotStart, slotEnd }: { slotStart: string; slotEnd: string }) {
-  const [now, setNow] = useState(() => Date.now())
+  const [now, setNow] = useState(0)
 
   useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1000)
+    setNow(Date.now())`n    const t = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(t)
   }, [])
 

@@ -10,7 +10,7 @@ export function RealtimeToasts({ userId }: { userId: string }) {
   useEffect(() => {
     const supabase = createClient()
     const channel = supabase
-      .channel(`global-toasts-${userId}`)
+      .channel(`global-toasts-${userId}-${Math.random().toString(36).slice(2)}`)
       .on('postgres_changes',
         {
           event: 'INSERT',

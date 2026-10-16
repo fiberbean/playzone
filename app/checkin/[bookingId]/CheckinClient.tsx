@@ -85,7 +85,7 @@ export function CheckinClient({ booking, settings }: Props) {
     })()
 
     const channel = supabase
-      .channel(`checkin-${booking.id}`)
+      .channel(`checkin-${booking.id}-${Math.random().toString(36).slice(2)}`)
       .on('postgres_changes',
         {
           event: 'INSERT',

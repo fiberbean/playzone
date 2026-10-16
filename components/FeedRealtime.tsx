@@ -11,7 +11,7 @@ export default function FeedRealtime() {
     const supabase = createClient()
 
     const channel = supabase
-      .channel('feed-realtime')
+      .channel(`feed-realtime-${Math.random().toString(36).slice(2)}`)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'posts' },

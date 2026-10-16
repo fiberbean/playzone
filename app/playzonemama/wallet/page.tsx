@@ -73,14 +73,45 @@ export default function WalletPage() {
 
   const fetchAll = async () => {
     const supabase = createClient()
+
+    // ==== DEBUG ====
+    const { data: { user } } = await supabase.auth.getUser()
+    console.log('[DEBUG] user:', user?.id, user?.email)
+
+    const { data: prof } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', user?.id)
+      .maybeSingle()
+    console.log('[DEBUG] role:', prof?.role)
+
+    const { data: rawRch, error: rawErr } = await supabase
+      .from('recharge_requests')
+      .select('id, amount, upi_ref, status')
+      .order('created_at', { ascending: false })
+      .limit(5)
+    console.log('[DEBUG] raw recharges:', rawRch?.length, 'error:', rawErr)
+    console.log('[DEBUG] raw rows:', rawRch)
+
+    const { data: joinedRch, error: joinErr } = await supabase
+      .from('recharge_requests')
+      .select(`
+        id, amount, upi_ref, status,
+        profile:profiles(full_name, email, avatar_url)
+      `)
+      .order('created_at', { ascending: false })
+      .limit(5)
+    console.log('[DEBUG] joined recharges:', joinedRch?.length, 'error:', joinErr)
+    // ==== END DEBUG ====
+
     const [rechargesRes, txnsRes, balancesRes] = await Promise.all([
       supabase
         .from('recharge_requests')
         .select(`
-          id, user_id, amount, upi_ref, upi_app, screenshot_url,
-          status, reviewed_at, rejection_reason, created_at,
-          profile:profiles(full_name, email, avatar_url)
-        `)
+  id, user_id, amount, upi_ref, upi_app, screenshot_url,
+  status, reviewed_at, rejection_reason, created_at,
+  profile:profiles!recharge_requests_user_id_fkey(full_name, email, avatar_url)
+`)
         .order('created_at', { ascending: false })
         .limit(100),
       supabase
@@ -88,7 +119,7 @@ export default function WalletPage() {
         .select(`
           id, user_id, type, amount, balance_after, source,
           reason_short, booking_id, created_at,
-          profile:profiles(full_name, email)
+          profile:profiles!wallet_transactions_user_id_fkey(full_name, email)
         `)
         .order('created_at', { ascending: false })
         .limit(200),
@@ -107,8 +138,9 @@ export default function WalletPage() {
   useEffect(() => {
     fetchAll()
     const supabase = createClient()
+    const channelName = `admin-wallet-${Math.random().toString(36).slice(2)}`
     const channel = supabase
-      .channel('admin-wallet')
+      .channel(channelName)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'recharge_requests' }, () => fetchAll())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'wallet_transactions' }, () => fetchAll())
       .subscribe()
@@ -335,77 +367,264 @@ function RechargeCard({
   row: RechargeRow
   onAction: (type: 'approve' | 'reject', row: RechargeRow) => void
 }) {
-  const color =
-    row.status === 'pending' ? 'border-amber-500/40'
-    : row.status === 'approved' ? 'border-green-500/30'
-    : 'border-red-500/30'
+  const [detailOpen, setDetailOpen] = useState(false)
+
+  const statusStyles = {
+    pending: 'border-amber-500/40 bg-amber-500/5',
+    approved: 'border-green-500/30 bg-green-500/5',
+    rejected: 'border-red-500/30 bg-red-500/5',
+  }[row.status]
+
+  const statusBadge = {
+    pending: 'bg-amber-500/10 border-amber-500/40 text-amber-300',
+    approved: 'bg-green-500/10 border-green-500/40 text-green-300',
+    rejected: 'bg-red-500/10 border-red-500/40 text-red-300',
+  }[row.status]
 
   return (
-    <div className={`bg-gradient-to-br from-[#12121a] to-[#0a0a0f] border rounded-xl p-3 sm:p-4 ${color}`}>
-      <div className="flex items-start justify-between gap-3 flex-wrap">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span
-              className={`text-[10px] font-black tracking-wider px-2 py-0.5 rounded-full border ${
-                row.status === 'pending' ? 'bg-amber-500/10 border-amber-500/40 text-amber-300'
-                : row.status === 'approved' ? 'bg-green-500/10 border-green-500/40 text-green-300'
-                : 'bg-red-500/10 border-red-500/40 text-red-300'
-              }`}
-            >
-              {row.status.toUpperCase()}
-            </span>
-            <span className="font-bold text-white">{formatINR(row.amount)}</span>
-          </div>
+    <>
+      <button
+        onClick={() => setDetailOpen(true)}
+        className={`w-full text-left bg-gradient-to-br from-[#12121a] to-[#0a0a0f] border rounded-2xl p-4 transition hover:border-cyan-500/40 ${statusStyles}`}
+      >
+        <div className="flex items-start justify-between gap-3 mb-3">
+          <span className={`text-[10px] font-black tracking-wider px-2 py-1 rounded-full border ${statusBadge}`}>
+            {row.status.toUpperCase()}
+          </span>
+          <span className="text-[10px] text-gray-500 font-mono">
+            #{row.id.slice(0, 8)}
+          </span>
+        </div>
 
-          <div className="text-xs text-gray-400 mt-1">
-            👤 {row.profile?.full_name ?? row.profile?.email ?? '—'}
+        <div className="flex items-center gap-3 mb-3">
+          {row.profile?.avatar_url ? (
+            <img
+              src={row.profile.avatar_url}
+              alt=""
+              className="w-11 h-11 rounded-full border border-cyan-500/30"
+            />
+          ) : (
+            <div className="w-11 h-11 rounded-full bg-gradient-to-br from-cyan-500 to-pink-500 flex items-center justify-center text-sm font-bold">
+              {(row.profile?.full_name ?? row.profile?.email ?? '?').charAt(0).toUpperCase()}
+            </div>
+          )}
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-bold text-white truncate">
+              {row.profile?.full_name ?? row.profile?.email ?? '—'}
+            </div>
+            <div className="text-xs text-gray-500 truncate">
+              {row.profile?.email ?? ''}
+            </div>
           </div>
+          <div className="text-right shrink-0">
+            <div className="text-2xl font-black text-white">
+              {formatINR(row.amount)}
+            </div>
+          </div>
+        </div>
 
-          <div className="text-[11px] text-gray-500 font-mono mt-0.5">
+        <div className="flex items-center justify-between text-[11px] text-gray-500 border-t border-white/5 pt-3">
+          <div className="font-mono truncate">
             UTR: {row.upi_ref}
-            {row.upi_app && <span className="ml-2">• {row.upi_app}</span>}
+            {row.upi_app && <span className="ml-1.5 text-cyan-400">• {row.upi_app}</span>}
+          </div>
+          <div>{formatDateTime(row.created_at)}</div>
+        </div>
+
+        <div className="mt-3 flex items-center gap-2 text-[10px] text-cyan-400 font-bold tracking-wider">
+          <span>TAP FOR DETAILS</span>
+          <span>→</span>
+        </div>
+      </button>
+
+      {/* Detail modal */}
+      {detailOpen && (
+        <RechargeDetailModal
+          row={row}
+          onClose={() => setDetailOpen(false)}
+          onAction={(type) => {
+            setDetailOpen(false)
+            onAction(type, row)
+          }}
+        />
+      )}
+    </>
+  )
+}
+
+function RechargeDetailModal({
+  row, onClose, onAction,
+}: {
+  row: RechargeRow
+  onClose: () => void
+  onAction: (type: 'approve' | 'reject') => void
+}) {
+  const statusStyles = {
+    pending: 'border-amber-500/40',
+    approved: 'border-green-500/40',
+    rejected: 'border-red-500/40',
+  }[row.status]
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className={`w-full max-w-md max-h-[92vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl border-2 bg-neutral-950 p-5 ${statusStyles}`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-bold tracking-widest text-gray-400">
+            RECHARGE REQUEST
+          </h2>
+          <button
+            onClick={onClose}
+            className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/5 text-gray-400 text-lg"
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Amount */}
+        <div className="text-center mb-6">
+          <div className="text-5xl font-black text-white mb-2">
+            {formatINR(row.amount)}
+          </div>
+          <div className={`inline-block text-[10px] font-black tracking-widest px-3 py-1 rounded-full border ${
+            row.status === 'pending' ? 'bg-amber-500/10 border-amber-500/40 text-amber-300'
+            : row.status === 'approved' ? 'bg-green-500/10 border-green-500/40 text-green-300'
+            : 'bg-red-500/10 border-red-500/40 text-red-300'
+          }`}>
+            {row.status.toUpperCase()}
+          </div>
+        </div>
+
+        {/* Customer */}
+        <div className="rounded-xl bg-white/5 border border-white/10 p-4 mb-4">
+          <div className="text-[10px] text-gray-500 tracking-wider font-bold mb-3">
+            CUSTOMER
+          </div>
+          <div className="flex items-center gap-3">
+            {row.profile?.avatar_url ? (
+              <img
+                src={row.profile.avatar_url}
+                alt=""
+                className="w-12 h-12 rounded-full border border-cyan-500/30"
+              />
+            ) : (
+              <div className="w-12 h-12 rounded-full bg-gradient-to-br from-cyan-500 to-pink-500 flex items-center justify-center text-base font-bold">
+                {(row.profile?.full_name ?? row.profile?.email ?? '?').charAt(0).toUpperCase()}
+              </div>
+            )}
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-bold text-white truncate">
+                {row.profile?.full_name ?? '—'}
+              </div>
+              <div className="text-xs text-gray-400 truncate">
+                {row.profile?.email ?? ''}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Payment details */}
+        <div className="rounded-xl bg-white/5 border border-white/10 p-4 mb-4 space-y-3">
+          <div className="text-[10px] text-gray-500 tracking-wider font-bold">
+            PAYMENT DETAILS
           </div>
 
-          <div className="text-[10px] text-gray-500 mt-1">
-            {formatDateTime(row.created_at)}
-          </div>
+          <DetailRow label="UTR / Reference" value={row.upi_ref} mono />
+          {row.upi_app && <DetailRow label="UPI App" value={row.upi_app} />}
+          <DetailRow label="Submitted" value={formatDateTime(row.created_at)} />
+          {row.reviewed_at && (
+            <DetailRow label="Reviewed" value={formatDateTime(row.reviewed_at)} />
+          )}
 
           {row.rejection_reason && (
-            <div className="text-[11px] text-red-400 mt-1">
-              Reason: {row.rejection_reason}
+            <div className="rounded-lg bg-red-500/10 border border-red-500/30 p-3 text-xs text-red-300">
+              <div className="font-bold text-[10px] tracking-wider mb-1">
+                REJECTION REASON
+              </div>
+              {row.rejection_reason}
             </div>
           )}
         </div>
 
-        <div className="flex flex-col gap-1.5">
-          {row.screenshot_url && (
+        {/* Screenshot */}
+        {row.screenshot_url && (
+          <div className="rounded-xl bg-white/5 border border-white/10 p-4 mb-4">
+            <div className="text-[10px] text-gray-500 tracking-wider font-bold mb-3">
+              SCREENSHOT
+            </div>
             <a
               href={row.screenshot_url}
               target="_blank"
               rel="noreferrer"
-              className="px-3 py-1.5 text-xs font-bold rounded-lg bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/20 text-center"
+              className="block"
             >
-              📷 View
+              <img
+                src={row.screenshot_url}
+                alt="Payment screenshot"
+                className="w-full rounded-lg border border-cyan-500/30 max-h-80 object-contain bg-black"
+              />
             </a>
-          )}
-          {row.status === 'pending' && (
-            <>
-              <button
-                onClick={() => onAction('approve', row)}
-                className="px-3 py-1.5 text-xs font-bold rounded-lg bg-green-600/90 hover:bg-green-600 text-white"
-              >
-                ✓ Approve
-              </button>
-              <button
-                onClick={() => onAction('reject', row)}
-                className="px-3 py-1.5 text-xs font-bold rounded-lg bg-red-600/70 hover:bg-red-600 text-white"
-              >
-                ✕ Reject
-              </button>
-            </>
-          )}
-        </div>
+            <a
+              href={row.screenshot_url}
+              target="_blank"
+              rel="noreferrer"
+              className="block mt-2 text-center text-xs text-cyan-400 font-bold tracking-wider"
+            >
+              Open Full Size →
+            </a>
+          </div>
+        )}
+
+        {/* Actions */}
+        {row.status === 'pending' && (
+          <div className="flex gap-2 mt-4">
+            <button
+              onClick={() => onAction('reject')}
+              className="flex-1 py-3 rounded-xl border border-red-500/40 text-red-300 text-sm font-bold hover:bg-red-500/10 transition"
+            >
+              ✕ Reject
+            </button>
+            <button
+              onClick={() => onAction('approve')}
+              className="flex-1 py-3 rounded-xl bg-gradient-to-r from-green-500 to-emerald-500 text-white text-sm font-bold"
+            >
+              ✓ Approve {formatINR(row.amount)}
+            </button>
+          </div>
+        )}
+
+        {row.status !== 'pending' && (
+          <button
+            onClick={onClose}
+            className="w-full py-3 rounded-xl bg-white/5 border border-white/10 text-gray-300 font-bold text-sm"
+          >
+            Close
+          </button>
+        )}
       </div>
+    </div>
+  )
+}
+
+function DetailRow({
+  label, value, mono,
+}: {
+  label: string
+  value: string
+  mono?: boolean
+}) {
+  return (
+    <div className="flex justify-between items-baseline gap-3">
+      <span className="text-xs text-gray-500">{label}</span>
+      <span className={`text-sm text-white text-right ${mono ? 'font-mono' : ''}`}>
+        {value}
+      </span>
     </div>
   )
 }

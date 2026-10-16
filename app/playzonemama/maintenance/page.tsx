@@ -81,7 +81,7 @@ export default function MaintenancePage() {
     fetchAll()
     const supabase = createClient()
     const channel = supabase
-      .channel('maintenance')
+      .channel(`maintenance-${Math.random().toString(36).slice(2)}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'console_maintenance' }, () => fetchAll())
       .subscribe()
     return () => { supabase.removeChannel(channel) }

@@ -76,7 +76,7 @@ export function WalletClient({
   useEffect(() => {
     const supabase = createClient()
     const channel = supabase
-      .channel('wallet-live')
+      .channel(`wallet-live-${Math.random().toString(36).slice(2)}`)
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'wallet_transactions' },
         (payload) => {

@@ -74,7 +74,7 @@ export default function AdminBookingsPage() {
     fetchData()
     const supabase = createClient()
     const channel = supabase
-      .channel('admin-bookings')
+      .channel(`admin-bookings-${Math.random().toString(36).slice(2)}`)
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'bookings' },
         () => fetchData()
