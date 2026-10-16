@@ -1,7 +1,7 @@
 // components/ScreenshotOCR.tsx
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { toast } from '@/components/ui/Toast'
 
 interface Props {
@@ -19,6 +19,31 @@ export function ScreenshotOCR({ onExtracted }: Props) {
   const [preview, setPreview] = useState<string | null>(null)
   const [extractedText, setExtractedText] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const previewUrlRef = useRef<string | null>(null)
+  const mountedRef = useRef(true)
+
+  // Track mount + cleanup blob URLs to avoid React #441 on mobile
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      if (previewUrlRef.current) {
+        URL.revokeObjectURL(previewUrlRef.current)
+        previewUrlRef.current = null
+      }
+    }
+  }, [])
+
+  const resetPreview = useCallback(() => {
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current)
+      previewUrlRef.current = null
+    }
+    setPreview(null)
+    setExtractedText(null)
+    setProgress(0)
+    if (inputRef.current) inputRef.current.value = ''
+  }, [])
 
   const handleFile = async (file: File) => {
     if (!file.type.startsWith('image/')) {
@@ -30,41 +55,41 @@ export function ScreenshotOCR({ onExtracted }: Props) {
       return
     }
 
-    // Show preview immediately
+    // Revoke any old blob URL before creating new one
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current)
+    }
     const previewUrl = URL.createObjectURL(file)
+    previewUrlRef.current = previewUrl
+
     setPreview(previewUrl)
     setProcessing(true)
     setProgress(0)
     setExtractedText(null)
 
     try {
-      // Dynamic import — only load when needed (saves bundle)
       const Tesseract = await import('tesseract.js')
 
       const result = await Tesseract.recognize(file, 'eng', {
         logger: (m: any) => {
+          if (!mountedRef.current) return
           if (m.status === 'recognizing text') {
             setProgress(Math.floor(m.progress * 100))
           }
         },
       })
 
+      if (!mountedRef.current) return
+
       const text = result.data.text
       setExtractedText(text)
 
-      // ---- UTR extraction patterns ----
-      // Common patterns in UPI screenshots:
-      //   "UTR: 402312345678"  →  UTR + 12 digits
-      //   "UPI transaction ID 4023XXXX"
-      //   "Transaction ID: 123456789012"
-      //   "Reference: 402312345678"
-      //   "Ref No. 402312345678"
       const utrPatterns = [
         /UTR[\s:#-]*(\d{9,18})/i,
         /UPI\s*(?:transaction\s*)?(?:id|ref|reference)[\s:#-]*([A-Z0-9]{8,20})/i,
         /(?:transaction|txn|ref(?:erence)?)\s*(?:id|no\.?|number)?[\s:#-]*([A-Z0-9]{10,20})/i,
-        /\b(\d{12})\b/,        // fallback: 12 consecutive digits
-        /\b(\d{10,18})\b/,     // fallback: 10-18 digits
+        /\b(\d{12})\b/,
+        /\b(\d{10,18})\b/,
       ]
 
       let utr: string | undefined
@@ -76,8 +101,6 @@ export function ScreenshotOCR({ onExtracted }: Props) {
         }
       }
 
-      // ---- Amount extraction ----
-      // Matches: "₹500", "Rs 500", "INR 500", "500.00"
       const amountPatterns = [
         /(?:₹|Rs\.?|INR)\s*([0-9,]+(?:\.\d{1,2})?)/i,
         /\b([0-9]{2,6}(?:\.\d{1,2})?)\s*(?:paid|sent|debited)/i,
@@ -95,6 +118,8 @@ export function ScreenshotOCR({ onExtracted }: Props) {
         }
       }
 
+      if (!mountedRef.current) return
+
       onExtracted({
         utr,
         amount,
@@ -109,13 +134,14 @@ export function ScreenshotOCR({ onExtracted }: Props) {
       }
     } catch (e) {
       console.error('OCR error:', e)
+      if (!mountedRef.current) return
       toast.error('OCR failed', 'Please enter UTR manually')
       onExtracted({
         screenshotBlob: file,
         previewUrl,
       })
     } finally {
-      setProcessing(false)
+      if (mountedRef.current) setProcessing(false)
     }
   }
 
@@ -125,7 +151,6 @@ export function ScreenshotOCR({ onExtracted }: Props) {
         ref={inputRef}
         type="file"
         accept="image/*"
-        capture="environment"
         className="hidden"
         onChange={(e) => {
           const file = e.target.files?.[0]
@@ -175,27 +200,26 @@ export function ScreenshotOCR({ onExtracted }: Props) {
         </div>
       ) : (
         <div className="space-y-3">
-          {/* Preview */}
           <div className="relative rounded-xl overflow-hidden border border-cyan-500/30 bg-black">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={preview}
               alt="Screenshot preview"
               className="w-full max-h-72 object-contain"
+              onError={() => {
+                // If blob URL is broken, reset gracefully
+                toast.error('Preview failed', 'Please retry upload')
+                resetPreview()
+              }}
             />
             <button
               type="button"
-              onClick={() => {
-                setPreview(null)
-                setExtractedText(null)
-                setProgress(0)
-                if (inputRef.current) inputRef.current.value = ''
-              }}
+              onClick={resetPreview}
               className="absolute top-2 right-2 w-8 h-8 flex items-center justify-center bg-red-500/90 hover:bg-red-500 rounded-full text-white text-sm"
             >
               ✕
             </button>
 
-            {/* Progress overlay */}
             {processing && (
               <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center">
                 <div className="text-4xl mb-3 animate-pulse">🔍</div>
@@ -215,7 +239,6 @@ export function ScreenshotOCR({ onExtracted }: Props) {
             )}
           </div>
 
-          {/* Extracted text preview (collapsed, useful for debug) */}
           {extractedText && !processing && (
             <details className="rounded-lg bg-neutral-900/50 border border-white/10 p-2">
               <summary className="text-[10px] text-gray-500 cursor-pointer tracking-wider font-bold">

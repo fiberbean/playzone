@@ -3,9 +3,9 @@
 
 import { useState, useEffect } from 'react'
 import { submitRecharge } from '@/lib/actions/recharge'
+import { uploadImageToR2 } from '@/lib/actions/upload'
 import { toast } from '@/components/ui/Toast'
 import { formatINR } from '@/lib/utils/money'
-import { createClient } from '@/lib/supabase/client'
 import { ScreenshotOCR } from '@/components/ScreenshotOCR'
 
 interface Props {
@@ -24,13 +24,10 @@ export function RechargeModal({ open, onClose, upiId }: Props) {
   const [uploading, setUploading] = useState(false)
   const [busy, setBusy] = useState(false)
 
-  // Detect return from UPI app (page regains focus after background)
   useEffect(() => {
     if (!open) return
     const onVisibility = () => {
       if (document.visibilityState === 'visible') {
-        // User returned from UPI app — hint them to submit
-        // Only if amount set and nothing submitted yet
         if (amount > 0 && !screenshotBlob && !upiRef) {
           toast.info('Welcome back', 'Paid? Paste UTR & upload screenshot')
         }
@@ -57,26 +54,26 @@ export function RechargeModal({ open, onClose, upiId }: Props) {
 
       if (screenshotBlob) {
         setUploading(true)
-        const supabase = createClient()
-        const fileName = `recharge-${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`
+        try {
+          // ✅ Use R2 upload (server action) — NOT Supabase Storage
+          const fd = new FormData()
+          const ext = (screenshotBlob.type.split('/')[1] || 'jpg').replace('jpeg', 'jpg')
+          fd.append('file', screenshotBlob, `recharge-${Date.now()}.${ext}`)
 
-        const { data, error } = await supabase.storage
-          .from('playzone-images')
-          .upload(fileName, screenshotBlob, {
-            contentType: screenshotBlob.type || 'image/jpeg',
-            upsert: false,
-          })
-
-        if (error) {
-          toast.error('Screenshot upload failed', 'You can still submit without it')
-        } else {
-          const { data: urlData } = supabase.storage
-            .from('playzone-images')
-            .getPublicUrl(data.path)
-          screenshot_url = urlData.publicUrl
-          screenshot_key = data.path
+          const result = await uploadImageToR2(fd)
+          if ('error' in result && result.error) {
+            console.warn('R2 upload failed:', result.error)
+            toast.warning('Screenshot upload failed', 'You can still submit without it')
+          } else if ('success' in result && result.success) {
+            screenshot_url = result.url
+            screenshot_key = result.key
+          }
+        } catch (uploadErr) {
+          console.error('Upload exception:', uploadErr)
+          toast.warning('Screenshot upload failed', 'You can still submit without it')
+        } finally {
+          setUploading(false)
         }
-        setUploading(false)
       }
 
       await submitRecharge({
@@ -89,7 +86,6 @@ export function RechargeModal({ open, onClose, upiId }: Props) {
 
       toast.success('Submitted', 'Admin will verify shortly')
       onClose()
-      // Reset
       setAmount(100)
       setCustomAmount('')
       setUpiRef('')
@@ -207,7 +203,6 @@ export function RechargeModal({ open, onClose, upiId }: Props) {
               setScreenshotPreview(previewUrl)
               if (utr) setUpiRef(utr)
               if (extAmount && !customAmount) {
-                // If amount was auto-extracted and differs from preset, use custom
                 if (extAmount !== amount) {
                   setCustomAmount(String(extAmount))
                 }
