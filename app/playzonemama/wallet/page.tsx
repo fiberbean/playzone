@@ -7,8 +7,9 @@ import { formatDateTime, formatDateShort } from '@/lib/utils/time'
 import { formatINR, formatSigned } from '@/lib/utils/money'
 import { ConfirmActionModal } from '@/components/ui/ConfirmActionModal'
 import { toast } from '@/components/ui/Toast'
-import { approveRecharge, rejectRecharge } from '@/lib/actions/recharge'
+import { approveRecharge } from '@/lib/actions/recharge'
 import { manualAdjustment } from '@/lib/actions/wallet'
+import { RejectModal } from './RejectModal'
 
 type Tab = 'recharge' | 'ledger' | 'balances' | 'adjust'
 
@@ -59,10 +60,9 @@ export default function WalletPage() {
   const [balances, setBalances] = useState<BalanceRow[]>([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
-  const [modal, setModal] = useState<null | {
-    type: 'approve' | 'reject'
-    row: RechargeRow
-  }>(null)
+  const [modal, setModal] = useState<null | { type: 'approve'; row: RechargeRow }>(null)
+  const [rejectRow, setRejectRow] = useState<RechargeRow | null>(null)
+  const [detailRow, setDetailRow] = useState<RechargeRow | null>(null)
   const [adjust, setAdjust] = useState({
     userId: '',
     amount: 100,
@@ -74,44 +74,14 @@ export default function WalletPage() {
   const fetchAll = async () => {
     const supabase = createClient()
 
-    // ==== DEBUG ====
-    const { data: { user } } = await supabase.auth.getUser()
-    console.log('[DEBUG] user:', user?.id, user?.email)
-
-    const { data: prof } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', user?.id)
-      .maybeSingle()
-    console.log('[DEBUG] role:', prof?.role)
-
-    const { data: rawRch, error: rawErr } = await supabase
-      .from('recharge_requests')
-      .select('id, amount, upi_ref, status')
-      .order('created_at', { ascending: false })
-      .limit(5)
-    console.log('[DEBUG] raw recharges:', rawRch?.length, 'error:', rawErr)
-    console.log('[DEBUG] raw rows:', rawRch)
-
-    const { data: joinedRch, error: joinErr } = await supabase
-      .from('recharge_requests')
-      .select(`
-        id, amount, upi_ref, status,
-        profile:profiles(full_name, email, avatar_url)
-      `)
-      .order('created_at', { ascending: false })
-      .limit(5)
-    console.log('[DEBUG] joined recharges:', joinedRch?.length, 'error:', joinErr)
-    // ==== END DEBUG ====
-
     const [rechargesRes, txnsRes, balancesRes] = await Promise.all([
       supabase
         .from('recharge_requests')
         .select(`
-  id, user_id, amount, upi_ref, upi_app, screenshot_url,
-  status, reviewed_at, rejection_reason, created_at,
-  profile:profiles!recharge_requests_user_id_fkey(full_name, email, avatar_url)
-`)
+          id, user_id, amount, upi_ref, upi_app, screenshot_url,
+          status, reviewed_at, rejection_reason, created_at,
+          profile:profiles!recharge_requests_user_id_fkey(full_name, email, avatar_url)
+        `)
         .order('created_at', { ascending: false })
         .limit(100),
       supabase
@@ -158,21 +128,6 @@ export default function WalletPage() {
     try {
       await approveRecharge(modal.row.id)
       toast.success('Approved', `₹${modal.row.amount} credited`)
-      setModal(null)
-      fetchAll()
-    } catch (e) {
-      toast.error('Failed', e instanceof Error ? e.message : '')
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  const handleReject = async (reason: string) => {
-    if (!modal) return
-    setBusy(modal.row.id)
-    try {
-      await rejectRecharge(modal.row.id, reason || 'Invalid UTR')
-      toast.success('Rejected')
       setModal(null)
       fetchAll()
     } catch (e) {
@@ -254,7 +209,12 @@ export default function WalletPage() {
       ) : (
         <>
           {tab === 'recharge' && (
-            <RechargeTab rows={recharges} onAction={(type, row) => setModal({ type, row })} />
+            <RechargeTab
+              rows={recharges}
+              onApprove={(row) => setModal({ type: 'approve', row })}
+              onReject={(row) => setRejectRow(row)}
+              onDetail={(row) => setDetailRow(row)}
+            />
           )}
           {tab === 'ledger' && <LedgerTab rows={txns} />}
           {tab === 'balances' && <BalancesTab rows={balances} />}
@@ -270,6 +230,7 @@ export default function WalletPage() {
         </>
       )}
 
+      {/* Approve modal */}
       {modal?.type === 'approve' && (
         <ConfirmActionModal
           open
@@ -286,39 +247,60 @@ export default function WalletPage() {
           notices={['Wallet will be credited immediately.']}
           confirmLabel="Approve & Credit"
           cancelLabel="Cancel"
+          busy={busy === modal.row.id}
           onConfirm={handleApprove}
           onCancel={() => setModal(null)}
         />
       )}
 
-      {modal?.type === 'reject' && (
-        <ConfirmActionModal
-          open
-          title="Reject Recharge"
-          variant="danger"
-          summary={[
-            `Customer: ${modal.row.profile?.full_name ?? modal.row.profile?.email ?? '—'}`,
-            `Amount: ${formatINR(modal.row.amount)}`,
-            `UTR: ${modal.row.upi_ref}`,
-          ]}
-          notices={['Customer will be notified with the reason.']}
-          reasonInput={{ enabled: true, label: 'Reason', placeholder: 'Invalid UTR / not received' }}
-          requireReason
-          confirmLabel="Reject"
-          cancelLabel="Cancel"
-          onConfirm={(reason) => handleReject(reason ?? '')}
-          onCancel={() => setModal(null)}
+      {/* Reject modal — dropdown reasons */}
+      <RejectModal
+        open={!!rejectRow}
+        onClose={() => setRejectRow(null)}
+        request={
+          rejectRow
+            ? {
+                id: rejectRow.id,
+                amount: rejectRow.amount,
+                upi_ref: rejectRow.upi_ref,
+                user: rejectRow.profile,
+              }
+            : null
+        }
+        onSuccess={() => {
+          setRejectRow(null)
+          fetchAll()
+        }}
+      />
+
+      {/* Detail modal */}
+      {detailRow && (
+        <RechargeDetailModal
+          row={detailRow}
+          onClose={() => setDetailRow(null)}
+          onApprove={() => {
+            setDetailRow(null)
+            setModal({ type: 'approve', row: detailRow })
+          }}
+          onReject={() => {
+            setDetailRow(null)
+            setRejectRow(detailRow)
+          }}
         />
       )}
     </div>
   )
 }
 
+// ================= RECHARGE TAB =================
+
 function RechargeTab({
-  rows, onAction,
+  rows, onApprove, onReject, onDetail,
 }: {
   rows: RechargeRow[]
-  onAction: (type: 'approve' | 'reject', row: RechargeRow) => void
+  onApprove: (row: RechargeRow) => void
+  onReject: (row: RechargeRow) => void
+  onDetail: (row: RechargeRow) => void
 }) {
   const pending = rows.filter((r) => r.status === 'pending')
   const recent = rows.filter((r) => r.status !== 'pending').slice(0, 20)
@@ -332,7 +314,14 @@ function RechargeTab({
           </h3>
           <div className="space-y-3">
             {pending.map((r) => (
-              <RechargeCard key={r.id} row={r} onAction={onAction} />
+              <PersonNote
+                key={r.id}
+                row={r}
+                variant="pending"
+                onApprove={onApprove}
+                onReject={onReject}
+                onDetail={onDetail}
+              />
             ))}
           </div>
         </section>
@@ -343,9 +332,16 @@ function RechargeTab({
           <h3 className="text-xs font-bold tracking-wider text-gray-500 mb-3">
             REVIEWED
           </h3>
-          <div className="space-y-2">
+          <div className="space-y-3">
             {recent.map((r) => (
-              <RechargeCard key={r.id} row={r} onAction={onAction} />
+              <PersonNote
+                key={r.id}
+                row={r}
+                variant="reviewed"
+                onApprove={onApprove}
+                onReject={onReject}
+                onDetail={onDetail}
+              />
             ))}
           </div>
         </section>
@@ -361,109 +357,183 @@ function RechargeTab({
   )
 }
 
-function RechargeCard({
-  row, onAction,
+// ================= PERSON NOTE CARD =================
+
+function PersonNote({
+  row, variant, onApprove, onReject, onDetail,
 }: {
   row: RechargeRow
-  onAction: (type: 'approve' | 'reject', row: RechargeRow) => void
+  variant: 'pending' | 'reviewed'
+  onApprove: (row: RechargeRow) => void
+  onReject: (row: RechargeRow) => void
+  onDetail: (row: RechargeRow) => void
 }) {
-  const [detailOpen, setDetailOpen] = useState(false)
+  const isPending = variant === 'pending'
+  const isApproved = row.status === 'approved'
+  const isRejected = row.status === 'rejected'
 
-  const statusStyles = {
-    pending: 'border-amber-500/40 bg-amber-500/5',
-    approved: 'border-green-500/30 bg-green-500/5',
-    rejected: 'border-red-500/30 bg-red-500/5',
-  }[row.status]
+  // Card border/bg by status
+  const cardClass = isPending
+    ? 'border-amber-500/40 bg-amber-500/[0.03]'
+    : isApproved
+    ? 'border-green-500/30 bg-green-500/[0.03]'
+    : 'border-red-500/40 bg-red-500/[0.03]'
 
-  const statusBadge = {
-    pending: 'bg-amber-500/10 border-amber-500/40 text-amber-300',
-    approved: 'bg-green-500/10 border-green-500/40 text-green-300',
-    rejected: 'bg-red-500/10 border-red-500/40 text-red-300',
-  }[row.status]
+  const badgeClass = isPending
+    ? 'bg-amber-500/10 border-amber-500/40 text-amber-300'
+    : isApproved
+    ? 'bg-green-500/10 border-green-500/40 text-green-300'
+    : 'bg-red-500/10 border-red-500/40 text-red-300'
+
+  const displayName = row.profile?.full_name ?? row.profile?.email ?? '—'
+  const firstName = (row.profile?.full_name ?? '').split(' ')[0] || displayName
 
   return (
-    <>
-      <button
-        onClick={() => setDetailOpen(true)}
-        className={`w-full text-left bg-gradient-to-br from-[#12121a] to-[#0a0a0f] border rounded-2xl p-4 transition hover:border-cyan-500/40 ${statusStyles}`}
-      >
-        <div className="flex items-start justify-between gap-3 mb-3">
-          <span className={`text-[10px] font-black tracking-wider px-2 py-1 rounded-full border ${statusBadge}`}>
-            {row.status.toUpperCase()}
-          </span>
-          <span className="text-[10px] text-gray-500 font-mono">
-            #{row.id.slice(0, 8)}
+    <div className={`rounded-2xl border-2 overflow-hidden ${cardClass}`}>
+      {/* Header strip */}
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/5">
+        <div className="flex items-center gap-2">
+          <span className="text-base">📝</span>
+          <span className="text-[10px] font-black tracking-widest text-gray-400">
+            RECHARGE NOTE
           </span>
         </div>
+        <span className={`text-[10px] font-black tracking-wider px-2.5 py-1 rounded-full border ${badgeClass}`}>
+          {isPending ? '🟡 PENDING' : isApproved ? '🟢 APPROVED' : '🔴 REJECTED'}
+        </span>
+      </div>
 
-        <div className="flex items-center gap-3 mb-3">
+      {/* Body */}
+      <div className="p-4">
+        {/* Person asking */}
+        <button
+          onClick={() => onDetail(row)}
+          className="w-full text-left flex items-center gap-3 mb-3 group"
+        >
           {row.profile?.avatar_url ? (
             <img
               src={row.profile.avatar_url}
               alt=""
-              className="w-11 h-11 rounded-full border border-cyan-500/30"
+              className="w-10 h-10 rounded-full border border-cyan-500/30 shrink-0"
             />
           ) : (
-            <div className="w-11 h-11 rounded-full bg-gradient-to-br from-cyan-500 to-pink-500 flex items-center justify-center text-sm font-bold">
-              {(row.profile?.full_name ?? row.profile?.email ?? '?').charAt(0).toUpperCase()}
+            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-cyan-500 to-pink-500 flex items-center justify-center text-sm font-bold shrink-0">
+              {displayName.charAt(0).toUpperCase()}
             </div>
           )}
           <div className="flex-1 min-w-0">
-            <div className="text-sm font-bold text-white truncate">
-              {row.profile?.full_name ?? row.profile?.email ?? '—'}
+            <div className="text-sm font-bold text-white truncate group-hover:text-cyan-300 transition">
+              {displayName}
             </div>
-            <div className="text-xs text-gray-500 truncate">
-              {row.profile?.email ?? ''}
+            <div className="text-[11px] text-gray-500 truncate">
+              {isPending
+                ? 'is requesting approval'
+                : isApproved
+                ? 'recharge approved'
+                : 'recharge rejected'}
             </div>
           </div>
-          <div className="text-right shrink-0">
-            <div className="text-2xl font-black text-white">
+        </button>
+
+        {/* Big amount box — pending shows amount, rejected shows reason bold */}
+        {isPending && (
+          <div className="rounded-xl border border-amber-500/30 bg-gradient-to-br from-amber-500/10 to-amber-500/[0.02] py-4 mb-3">
+            <div className="text-center">
+              <div className="text-[10px] font-black tracking-widest text-amber-400/80 mb-1">
+                REQUESTED AMOUNT
+              </div>
+              <div className="text-4xl font-black text-white tabular-nums">
+                {formatINR(row.amount)}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isRejected && row.rejection_reason && (
+          <div className="rounded-xl border-l-4 border-red-500 bg-red-500/10 px-4 py-3 mb-3">
+            <div className="text-[10px] font-black tracking-widest text-red-400 mb-1">
+              ❌ REASON
+            </div>
+            <div className="text-base font-black text-red-100 leading-snug">
+              {row.rejection_reason}
+            </div>
+          </div>
+        )}
+
+        {isApproved && (
+          <div className="rounded-xl border-l-4 border-green-500 bg-green-500/10 px-4 py-3 mb-3">
+            <div className="text-[10px] font-black tracking-widest text-green-400 mb-1">
+              ✓ CREDITED
+            </div>
+            <div className="text-2xl font-black text-green-100 tabular-nums">
               {formatINR(row.amount)}
             </div>
           </div>
-        </div>
+        )}
 
-        <div className="flex items-center justify-between text-[11px] text-gray-500 border-t border-white/5 pt-3">
-          <div className="font-mono truncate">
+        {/* Meta row */}
+        <button
+          onClick={() => onDetail(row)}
+          className="w-full text-left flex items-center justify-between text-[11px] text-gray-500 mb-3"
+        >
+          <span className="font-mono truncate">
             UTR: {row.upi_ref}
             {row.upi_app && <span className="ml-1.5 text-cyan-400">• {row.upi_app}</span>}
+          </span>
+          <span className="shrink-0 ml-2">{formatDateTime(row.created_at)}</span>
+        </button>
+
+        {/* Inline actions — pending only */}
+        {isPending && (
+          <div className="flex gap-2 pt-3 border-t border-white/5">
+            <button
+              onClick={() => onReject(row)}
+              className="flex-1 py-2.5 rounded-xl border border-red-500/40 text-red-300 text-xs font-bold hover:bg-red-500/10 active:scale-[0.98] transition"
+            >
+              ✕ Reject
+            </button>
+            <button
+              onClick={() => onApprove(row)}
+              className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-green-500 to-emerald-500 text-white text-xs font-bold active:scale-[0.98] transition"
+            >
+              ✓ Approve {formatINR(row.amount)}
+            </button>
           </div>
-          <div>{formatDateTime(row.created_at)}</div>
-        </div>
+        )}
 
-        <div className="mt-3 flex items-center gap-2 text-[10px] text-cyan-400 font-bold tracking-wider">
-          <span>TAP FOR DETAILS</span>
-          <span>→</span>
-        </div>
-      </button>
-
-      {/* Detail modal */}
-      {detailOpen && (
-        <RechargeDetailModal
-          row={row}
-          onClose={() => setDetailOpen(false)}
-          onAction={(type) => {
-            setDetailOpen(false)
-            onAction(type, row)
-          }}
-        />
-      )}
-    </>
+        {/* View details link for reviewed */}
+        {!isPending && (
+          <button
+            onClick={() => onDetail(row)}
+            className="w-full py-2 rounded-xl bg-white/5 border border-white/10 text-gray-400 text-[10px] font-bold tracking-wider hover:text-white transition"
+          >
+            VIEW DETAILS →
+          </button>
+        )}
+      </div>
+    </div>
   )
 }
 
+// ================= DETAIL MODAL =================
+
 function RechargeDetailModal({
-  row, onClose, onAction,
+  row, onClose, onApprove, onReject,
 }: {
   row: RechargeRow
   onClose: () => void
-  onAction: (type: 'approve' | 'reject') => void
+  onApprove: () => void
+  onReject: () => void
 }) {
-  const statusStyles = {
-    pending: 'border-amber-500/40',
-    approved: 'border-green-500/40',
-    rejected: 'border-red-500/40',
-  }[row.status]
+  const isPending = row.status === 'pending'
+  const isApproved = row.status === 'approved'
+  const isRejected = row.status === 'rejected'
+
+  const borderClass = isPending
+    ? 'border-amber-500/40'
+    : isApproved
+    ? 'border-green-500/40'
+    : 'border-red-500/40'
 
   return (
     <div
@@ -471,14 +541,17 @@ function RechargeDetailModal({
       onClick={onClose}
     >
       <div
-        className={`w-full max-w-md max-h-[92vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl border-2 bg-neutral-950 p-5 ${statusStyles}`}
+        className={`w-full max-w-md max-h-[92vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl border-2 bg-neutral-950 p-5 ${borderClass}`}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-bold tracking-widest text-gray-400">
-            RECHARGE REQUEST
-          </h2>
+          <div className="flex items-center gap-2">
+            <span className="text-base">📝</span>
+            <span className="text-[10px] font-black tracking-widest text-gray-400">
+              RECHARGE NOTE
+            </span>
+          </div>
           <button
             onClick={onClose}
             className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/5 text-gray-400 text-lg"
@@ -487,83 +560,113 @@ function RechargeDetailModal({
           </button>
         </div>
 
-        {/* Amount */}
-        <div className="text-center mb-6">
-          <div className="text-5xl font-black text-white mb-2">
-            {formatINR(row.amount)}
-          </div>
-          <div className={`inline-block text-[10px] font-black tracking-widest px-3 py-1 rounded-full border ${
-            row.status === 'pending' ? 'bg-amber-500/10 border-amber-500/40 text-amber-300'
-            : row.status === 'approved' ? 'bg-green-500/10 border-green-500/40 text-green-300'
-            : 'bg-red-500/10 border-red-500/40 text-red-300'
-          }`}>
-            {row.status.toUpperCase()}
-          </div>
+        {/* Status badge */}
+        <div className="text-center mb-4">
+          <span
+            className={`inline-block text-[10px] font-black tracking-widest px-3 py-1 rounded-full border ${
+              isPending
+                ? 'bg-amber-500/10 border-amber-500/40 text-amber-300'
+                : isApproved
+                ? 'bg-green-500/10 border-green-500/40 text-green-300'
+                : 'bg-red-500/10 border-red-500/40 text-red-300'
+            }`}
+          >
+            {isPending ? '🟡 PENDING' : isApproved ? '🟢 APPROVED' : '🔴 REJECTED'}
+          </span>
         </div>
 
-        {/* Customer */}
-        <div className="rounded-xl bg-white/5 border border-white/10 p-4 mb-4">
-          <div className="text-[10px] text-gray-500 tracking-wider font-bold mb-3">
-            CUSTOMER
+        {/* Person — big */}
+        <div className="flex flex-col items-center mb-5">
+          {row.profile?.avatar_url ? (
+            <img
+              src={row.profile.avatar_url}
+              alt=""
+              className="w-16 h-16 rounded-full border-2 border-cyan-500/30 mb-2"
+            />
+          ) : (
+            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-cyan-500 to-pink-500 flex items-center justify-center text-xl font-bold mb-2">
+              {(row.profile?.full_name ?? row.profile?.email ?? '?').charAt(0).toUpperCase()}
+            </div>
+          )}
+          <div className="text-base font-bold text-white text-center">
+            {row.profile?.full_name ?? '—'}
           </div>
-          <div className="flex items-center gap-3">
-            {row.profile?.avatar_url ? (
-              <img
-                src={row.profile.avatar_url}
-                alt=""
-                className="w-12 h-12 rounded-full border border-cyan-500/30"
-              />
-            ) : (
-              <div className="w-12 h-12 rounded-full bg-gradient-to-br from-cyan-500 to-pink-500 flex items-center justify-center text-base font-bold">
-                {(row.profile?.full_name ?? row.profile?.email ?? '?').charAt(0).toUpperCase()}
+          <div className="text-xs text-gray-500 text-center">
+            {row.profile?.email ?? ''}
+          </div>
+          {isPending && (
+            <div className="text-[11px] text-amber-400 mt-1 italic">
+              is requesting approval
+            </div>
+          )}
+        </div>
+
+        {/* Amount OR reason */}
+        {isPending && (
+          <div className="rounded-xl border border-amber-500/30 bg-gradient-to-br from-amber-500/10 to-transparent py-6 mb-4">
+            <div className="text-center">
+              <div className="text-[10px] font-black tracking-widest text-amber-400/80 mb-1">
+                REQUESTED AMOUNT
               </div>
-            )}
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-bold text-white truncate">
-                {row.profile?.full_name ?? '—'}
-              </div>
-              <div className="text-xs text-gray-400 truncate">
-                {row.profile?.email ?? ''}
+              <div className="text-5xl font-black text-white tabular-nums">
+                {formatINR(row.amount)}
               </div>
             </div>
           </div>
-        </div>
+        )}
+
+        {isRejected && row.rejection_reason && (
+          <div className="rounded-xl border-l-4 border-red-500 bg-red-500/10 px-4 py-4 mb-4">
+            <div className="text-[10px] font-black tracking-widest text-red-400 mb-2">
+              ❌ REJECTION REASON
+            </div>
+            <div className="text-lg font-black text-red-100 leading-snug">
+              {row.rejection_reason}
+            </div>
+            {row.reviewed_at && (
+              <div className="text-[10px] text-red-300/70 mt-2">
+                Reviewed {formatDateTime(row.reviewed_at)}
+              </div>
+            )}
+          </div>
+        )}
+
+        {isApproved && (
+          <div className="rounded-xl border-l-4 border-green-500 bg-green-500/10 px-4 py-4 mb-4">
+            <div className="text-[10px] font-black tracking-widest text-green-400 mb-2">
+              ✓ CREDITED TO WALLET
+            </div>
+            <div className="text-3xl font-black text-green-100 tabular-nums">
+              {formatINR(row.amount)}
+            </div>
+            {row.reviewed_at && (
+              <div className="text-[10px] text-green-300/70 mt-2">
+                Approved {formatDateTime(row.reviewed_at)}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Payment details */}
         <div className="rounded-xl bg-white/5 border border-white/10 p-4 mb-4 space-y-3">
           <div className="text-[10px] text-gray-500 tracking-wider font-bold">
             PAYMENT DETAILS
           </div>
-
           <DetailRow label="UTR / Reference" value={row.upi_ref} mono />
           {row.upi_app && <DetailRow label="UPI App" value={row.upi_app} />}
           <DetailRow label="Submitted" value={formatDateTime(row.created_at)} />
           {row.reviewed_at && (
             <DetailRow label="Reviewed" value={formatDateTime(row.reviewed_at)} />
           )}
-
-          {row.rejection_reason && (
-            <div className="rounded-lg bg-red-500/10 border border-red-500/30 p-3 text-xs text-red-300">
-              <div className="font-bold text-[10px] tracking-wider mb-1">
-                REJECTION REASON
-              </div>
-              {row.rejection_reason}
-            </div>
-          )}
         </div>
 
         {/* Screenshot */}
-        {row.screenshot_url && (
+        {row.screenshot_url ? (
           <div className="rounded-xl bg-white/5 border border-white/10 p-4 mb-4">
             <div className="text-[10px] text-gray-500 tracking-wider font-bold mb-3">
               SCREENSHOT
             </div>
-            <a
-              href={row.screenshot_url}
-              target="_blank"
-              rel="noreferrer"
-              className="block"
-            >
+            <a href={row.screenshot_url} target="_blank" rel="noreferrer" className="block">
               <img
                 src={row.screenshot_url}
                 alt="Payment screenshot"
@@ -579,19 +682,26 @@ function RechargeDetailModal({
               Open Full Size →
             </a>
           </div>
+        ) : (
+          <div className="rounded-xl bg-white/5 border border-white/10 p-4 mb-4 text-center">
+            <div className="text-[10px] text-gray-500 tracking-wider font-bold mb-1">
+              SCREENSHOT
+            </div>
+            <div className="text-xs text-gray-500 italic">Not uploaded</div>
+          </div>
         )}
 
         {/* Actions */}
-        {row.status === 'pending' && (
+        {isPending && (
           <div className="flex gap-2 mt-4">
             <button
-              onClick={() => onAction('reject')}
+              onClick={onReject}
               className="flex-1 py-3 rounded-xl border border-red-500/40 text-red-300 text-sm font-bold hover:bg-red-500/10 transition"
             >
               ✕ Reject
             </button>
             <button
-              onClick={() => onAction('approve')}
+              onClick={onApprove}
               className="flex-1 py-3 rounded-xl bg-gradient-to-r from-green-500 to-emerald-500 text-white text-sm font-bold"
             >
               ✓ Approve {formatINR(row.amount)}
@@ -599,7 +709,7 @@ function RechargeDetailModal({
           </div>
         )}
 
-        {row.status !== 'pending' && (
+        {!isPending && (
           <button
             onClick={onClose}
             className="w-full py-3 rounded-xl bg-white/5 border border-white/10 text-gray-300 font-bold text-sm"
@@ -611,6 +721,8 @@ function RechargeDetailModal({
     </div>
   )
 }
+
+// ================= DETAIL ROW =================
 
 function DetailRow({
   label, value, mono,
@@ -628,6 +740,8 @@ function DetailRow({
     </div>
   )
 }
+
+// ================= LEDGER TAB =================
 
 function LedgerTab({ rows }: { rows: TxnRow[] }) {
   return (
@@ -674,6 +788,8 @@ function LedgerTab({ rows }: { rows: TxnRow[] }) {
     </div>
   )
 }
+
+// ================= BALANCES TAB =================
 
 function BalancesTab({ rows }: { rows: BalanceRow[] }) {
   const total = rows.reduce((s, r) => s + Number(r.wallet_balance), 0)
@@ -728,6 +844,8 @@ function BalancesTab({ rows }: { rows: BalanceRow[] }) {
     </div>
   )
 }
+
+// ================= ADJUST TAB =================
 
 function AdjustTab({
   balances, adjust, setAdjust, busy, onSubmit,

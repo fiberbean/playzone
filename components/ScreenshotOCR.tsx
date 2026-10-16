@@ -4,25 +4,35 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { toast } from '@/components/ui/Toast'
 
-interface Props {
-  onExtracted: (data: {
-    utr?: string
-    amount?: number
-    screenshotBlob: Blob
-    previewUrl: string
-  }) => void
+interface ExtractedData {
+  utr?: string
+  amount?: number
+  screenshotBlob: Blob
+  previewUrl: string
 }
 
-export function ScreenshotOCR({ onExtracted }: Props) {
+interface Props {
+  onExtracted: (data: ExtractedData) => void
+  /** Optional: last accepted amount, for "use this" compare */
+  expectedAmount?: number
+}
+
+export function ScreenshotOCR({ onExtracted, expectedAmount }: Props) {
   const [processing, setProcessing] = useState(false)
   const [progress, setProgress] = useState(0)
   const [preview, setPreview] = useState<string | null>(null)
   const [extractedText, setExtractedText] = useState<string | null>(null)
+
+  // NEW: state for showing what was detected
+  const [detected, setDetected] = useState<{
+    utr?: string
+    amount?: number
+  } | null>(null)
+
   const inputRef = useRef<HTMLInputElement>(null)
   const previewUrlRef = useRef<string | null>(null)
   const mountedRef = useRef(true)
 
-  // Track mount + cleanup blob URLs to avoid React #441 on mobile
   useEffect(() => {
     mountedRef.current = true
     return () => {
@@ -41,6 +51,7 @@ export function ScreenshotOCR({ onExtracted }: Props) {
     }
     setPreview(null)
     setExtractedText(null)
+    setDetected(null)
     setProgress(0)
     if (inputRef.current) inputRef.current.value = ''
   }, [])
@@ -55,7 +66,6 @@ export function ScreenshotOCR({ onExtracted }: Props) {
       return
     }
 
-    // Revoke any old blob URL before creating new one
     if (previewUrlRef.current) {
       URL.revokeObjectURL(previewUrlRef.current)
     }
@@ -66,6 +76,7 @@ export function ScreenshotOCR({ onExtracted }: Props) {
     setProcessing(true)
     setProgress(0)
     setExtractedText(null)
+    setDetected(null)
 
     try {
       const Tesseract = await import('tesseract.js')
@@ -84,10 +95,12 @@ export function ScreenshotOCR({ onExtracted }: Props) {
       const text = result.data.text
       setExtractedText(text)
 
+      // ---- UTR extraction ----
       const utrPatterns = [
-        /UTR[\s:#-]*(\d{9,18})/i,
-        /UPI\s*(?:transaction\s*)?(?:id|ref|reference)[\s:#-]*([A-Z0-9]{8,20})/i,
-        /(?:transaction|txn|ref(?:erence)?)\s*(?:id|no\.?|number)?[\s:#-]*([A-Z0-9]{10,20})/i,
+        /\bUTR[\s:#-]*([0-9]{10,18})\b/i,
+        /UPI\s*(?:transaction\s*)?(?:id|ref|reference)[\s:#-]*([A-Z0-9]{8,22})/i,
+        /(?:transaction|txn)\s*(?:id|no\.?|number)?[\s:#-]*([A-Z0-9]{10,22})/i,
+        /ref(?:erence)?\s*(?:no\.?|number|id)?[\s:#-]*([A-Z0-9]{8,22})/i,
         /\b(\d{12})\b/,
         /\b(\d{10,18})\b/,
       ]
@@ -101,24 +114,60 @@ export function ScreenshotOCR({ onExtracted }: Props) {
         }
       }
 
-      const amountPatterns = [
-        /(?:₹|Rs\.?|INR)\s*([0-9,]+(?:\.\d{1,2})?)/i,
-        /\b([0-9]{2,6}(?:\.\d{1,2})?)\s*(?:paid|sent|debited)/i,
-      ]
+      // ---- Amount extraction (context-aware) ----
+      const MIN_AMT = 10
+      const MAX_AMT = 50000
 
-      let amount: number | undefined
-      for (const pattern of amountPatterns) {
-        const match = text.match(pattern)
-        if (match && match[1]) {
-          const parsed = Number(match[1].replace(/,/g, ''))
-          if (parsed > 0 && parsed < 100000) {
-            amount = parsed
-            break
-          }
-        }
+      const parseAmt = (s: string): number | null => {
+        const n = Number(s.replace(/[,\s]/g, ''))
+        if (isNaN(n) || n < MIN_AMT || n > MAX_AMT) return null
+        return n
       }
 
-      if (!mountedRef.current) return
+      const allAmounts: { value: number; context: string; score: number }[] = []
+
+      const rupeeRegex = /(?:₹|Rs\.?|INR)\s*([0-9][0-9,]*(?:\.\d{1,2})?)/gi
+      let m: RegExpExecArray | null
+      while ((m = rupeeRegex.exec(text)) !== null) {
+        const val = parseAmt(m[1])
+        if (val === null) continue
+        const ctx = text.slice(Math.max(0, m.index - 40), m.index + 60).toLowerCase()
+        let score = 1
+
+        if (/\b(paid|sent|debited|amount|total)\b/.test(ctx)) score += 3
+        if (/\bpaid\s+to\b|\bsent\s+to\b/.test(ctx)) score += 4
+        if (/\b(am|pm|oct|nov|dec|jan|feb|mar|apr|may|jun|jul|aug|sep|\d{4}\s*$)/.test(ctx)) {
+          score -= 5
+        }
+        if (/\b(utr|transaction\s*id|txn|ref)\b/.test(ctx)) score -= 4
+
+        allAmounts.push({ value: val, context: ctx, score })
+      }
+
+      const paidRegex = /\b(?:paid|sent|debited)\s*:?\s*([0-9][0-9,]*(?:\.\d{1,2})?)/gi
+      while ((m = paidRegex.exec(text)) !== null) {
+        const val = parseAmt(m[1])
+        if (val === null) continue
+        allAmounts.push({ value: val, context: m[0].toLowerCase(), score: 4 })
+      }
+
+      let amount: number | undefined
+      if (allAmounts.length > 0) {
+        const freq = new Map<number, number>()
+        for (const a of allAmounts) freq.set(a.value, (freq.get(a.value) ?? 0) + 1)
+
+        allAmounts.sort((a, b) => {
+          if (b.score !== a.score) return b.score - a.score
+          return (freq.get(b.value) ?? 0) - (freq.get(a.value) ?? 0)
+        })
+
+        amount = allAmounts[0].value
+      }
+
+      console.log('[OCR] Amount candidates:', allAmounts)
+      console.log('[OCR] Picked amount:', amount)
+
+      setDetected({ utr, amount })
 
       onExtracted({
         utr,
@@ -127,10 +176,15 @@ export function ScreenshotOCR({ onExtracted }: Props) {
         previewUrl,
       })
 
-      if (utr) {
+      // Smarter toasts
+      if (utr && amount) {
+        toast.success('Detected', `UTR: ${utr} · ₹${amount}`)
+      } else if (utr) {
         toast.success('UTR detected', `Auto-filled: ${utr}`)
+      } else if (amount) {
+        toast.success('Amount detected', `₹${amount}`)
       } else {
-        toast.warning('UTR not detected', 'Please enter manually')
+        toast.warning('Nothing detected', 'Please fill UTR & amount manually')
       }
     } catch (e) {
       console.error('OCR error:', e)
@@ -174,9 +228,7 @@ export function ScreenshotOCR({ onExtracted }: Props) {
             <span className="text-xs font-bold tracking-wider text-cyan-300">
               UPLOAD SCREENSHOT
             </span>
-            <span className="text-[10px] text-gray-500">
-              From gallery
-            </span>
+            <span className="text-[10px] text-gray-500">From gallery</span>
           </button>
 
           <button
@@ -193,13 +245,12 @@ export function ScreenshotOCR({ onExtracted }: Props) {
             <span className="text-xs font-bold tracking-wider text-pink-300">
               TAKE PHOTO
             </span>
-            <span className="text-[10px] text-gray-500">
-              Use camera
-            </span>
+            <span className="text-[10px] text-gray-500">Use camera</span>
           </button>
         </div>
       ) : (
         <div className="space-y-3">
+          {/* Preview */}
           <div className="relative rounded-xl overflow-hidden border border-cyan-500/30 bg-black">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
@@ -207,7 +258,6 @@ export function ScreenshotOCR({ onExtracted }: Props) {
               alt="Screenshot preview"
               className="w-full max-h-72 object-contain"
               onError={() => {
-                // If blob URL is broken, reset gracefully
                 toast.error('Preview failed', 'Please retry upload')
                 resetPreview()
               }}
@@ -232,13 +282,56 @@ export function ScreenshotOCR({ onExtracted }: Props) {
                     style={{ width: `${progress}%` }}
                   />
                 </div>
-                <div className="text-[10px] text-gray-400 font-mono">
-                  {progress}%
-                </div>
+                <div className="text-[10px] text-gray-400 font-mono">{progress}%</div>
               </div>
             )}
           </div>
 
+          {/* NEW: Detected chips — visible feedback */}
+          {detected && !processing && (
+            <div className="rounded-xl border border-cyan-500/30 bg-cyan-500/5 p-3 space-y-2">
+              <div className="text-[10px] font-bold tracking-wider text-cyan-300">
+                ✓ AUTO-DETECTED
+              </div>
+
+              {/* UTR chip */}
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] text-gray-400">UTR / Ref</span>
+                {detected.utr ? (
+                  <span className="font-mono text-xs text-green-300 bg-green-500/10 px-2 py-1 rounded border border-green-500/30">
+                    {detected.utr}
+                  </span>
+                ) : (
+                  <span className="text-[11px] text-amber-300 italic">
+                    Not detected — enter manually
+                  </span>
+                )}
+              </div>
+
+              {/* Amount chip */}
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] text-gray-400">Amount</span>
+                {detected.amount ? (
+                  <span className="font-mono text-xs text-green-300 bg-green-500/10 px-2 py-1 rounded border border-green-500/30">
+                    ₹{detected.amount}
+                  </span>
+                ) : (
+                  <span className="text-[11px] text-amber-300 italic">
+                    Not detected — verify amount
+                  </span>
+                )}
+              </div>
+
+              {/* Hint if detected amount differs from expected */}
+              {detected.amount && expectedAmount && detected.amount !== expectedAmount && (
+                <div className="text-[10px] text-amber-300 pt-1 border-t border-cyan-500/20">
+                  ⚠ Detected ₹{detected.amount}, expected ₹{expectedAmount}. Verify before submit.
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Extracted text (debug) */}
           {extractedText && !processing && (
             <details className="rounded-lg bg-neutral-900/50 border border-white/10 p-2">
               <summary className="text-[10px] text-gray-500 cursor-pointer tracking-wider font-bold">

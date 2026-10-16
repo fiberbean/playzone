@@ -24,6 +24,11 @@ export function RechargeModal({ open, onClose, upiId }: Props) {
   const [uploading, setUploading] = useState(false)
   const [busy, setBusy] = useState(false)
 
+  // NEW: track if UTR was auto-filled (for chip UI)
+  const [utrAutoFilled, setUtrAutoFilled] = useState(false)
+  // NEW: track if amount was auto-filled
+  const [amountAutoFilled, setAmountAutoFilled] = useState(false)
+
   useEffect(() => {
     if (!open) return
     const onVisibility = () => {
@@ -55,7 +60,6 @@ export function RechargeModal({ open, onClose, upiId }: Props) {
       if (screenshotBlob) {
         setUploading(true)
         try {
-          // ✅ Use R2 upload (server action) — NOT Supabase Storage
           const fd = new FormData()
           const ext = (screenshotBlob.type.split('/')[1] || 'jpg').replace('jpeg', 'jpg')
           fd.append('file', screenshotBlob, `recharge-${Date.now()}.${ext}`)
@@ -86,12 +90,15 @@ export function RechargeModal({ open, onClose, upiId }: Props) {
 
       toast.success('Submitted', 'Admin will verify shortly')
       onClose()
+      // Reset
       setAmount(100)
       setCustomAmount('')
       setUpiRef('')
       setUpiApp('')
       setScreenshotBlob(null)
       setScreenshotPreview(null)
+      setUtrAutoFilled(false)
+      setAmountAutoFilled(false)
     } catch (e) {
       toast.error('Failed', e instanceof Error ? e.message : '')
     } finally {
@@ -100,8 +107,22 @@ export function RechargeModal({ open, onClose, upiId }: Props) {
     }
   }
 
+  const handleReset = () => {
+    setAmount(100)
+    setCustomAmount('')
+    setUpiRef('')
+    setUpiApp('')
+    setScreenshotBlob(null)
+    setScreenshotPreview(null)
+    setUtrAutoFilled(false)
+    setAmountAutoFilled(false)
+  }
+
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-0 sm:p-4" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-0 sm:p-4"
+      onClick={onClose}
+    >
       <div
         className="w-full max-w-md max-h-[92vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl border border-cyan-500/40 bg-neutral-950 p-5"
         onClick={(e) => e.stopPropagation()}
@@ -113,12 +134,24 @@ export function RechargeModal({ open, onClose, upiId }: Props) {
 
         {/* Amount presets */}
         <div className="mb-3">
-          <div className="text-[10px] text-gray-500 tracking-wider mb-2">AMOUNT</div>
+          <div className="text-[10px] text-gray-500 tracking-wider mb-2 flex items-center justify-between">
+            <span>AMOUNT</span>
+            {/* NEW: auto-filled chip */}
+            {amountAutoFilled && (
+              <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-green-500/15 border border-green-500/40 text-green-300">
+                ✓ AUTO-FILLED
+              </span>
+            )}
+          </div>
           <div className="grid grid-cols-4 gap-2">
             {[100, 200, 500, 1000].map((a) => (
               <button
                 key={a}
-                onClick={() => { setAmount(a); setCustomAmount('') }}
+                onClick={() => {
+                  setAmount(a)
+                  setCustomAmount('')
+                  setAmountAutoFilled(false)
+                }}
                 className={`py-2.5 rounded-xl text-sm font-bold border transition ${
                   !customAmount && amount === a
                     ? 'border-cyan-500 bg-cyan-500/10 text-cyan-300'
@@ -132,9 +165,16 @@ export function RechargeModal({ open, onClose, upiId }: Props) {
           <input
             type="number"
             value={customAmount}
-            onChange={(e) => setCustomAmount(e.target.value)}
+            onChange={(e) => {
+              setCustomAmount(e.target.value)
+              setAmountAutoFilled(false)
+            }}
             placeholder="Or custom amount"
-            className="w-full mt-2 bg-[#0a0a0f] border border-white/10 rounded-xl px-3 py-2.5 text-sm"
+            className={`w-full mt-2 bg-[#0a0a0f] border rounded-xl px-3 py-2.5 text-sm transition ${
+              amountAutoFilled
+                ? 'border-green-500/40 bg-green-500/5 text-green-200'
+                : 'border-white/10'
+            }`}
           />
         </div>
 
@@ -146,12 +186,8 @@ export function RechargeModal({ open, onClose, upiId }: Props) {
 
           <div className="flex items-center gap-2 mb-3">
             <div className="flex-1 min-w-0 rounded-lg bg-[#0a0a0f] border border-cyan-500/30 px-3 py-3">
-              <div className="text-[9px] text-gray-500 tracking-wider font-bold mb-1">
-                UPI ID
-              </div>
-              <div className="font-mono text-base text-white truncate">
-                {upiId}
-              </div>
+              <div className="text-[9px] text-gray-500 tracking-wider font-bold mb-1">UPI ID</div>
+              <div className="font-mono text-base text-white truncate">{upiId}</div>
             </div>
             <button
               type="button"
@@ -186,7 +222,8 @@ export function RechargeModal({ open, onClose, upiId }: Props) {
           </a>
 
           <div className="text-[10px] text-gray-500 text-center mt-3 leading-relaxed">
-            Or open GPay / PhonePe / Paytm manually<br />
+            Or open GPay / PhonePe / Paytm manually
+            <br />
             and pay to the UPI ID above
           </div>
         </div>
@@ -195,17 +232,29 @@ export function RechargeModal({ open, onClose, upiId }: Props) {
         <div className="mb-3">
           <div className="text-[10px] text-gray-500 tracking-wider mb-2 flex items-center justify-between">
             <span>PAYMENT SCREENSHOT</span>
-            <span className="text-cyan-400">AUTO-READS UTR</span>
+            <span className="text-cyan-400">AUTO-READS UTR & AMOUNT</span>
           </div>
           <ScreenshotOCR
+            expectedAmount={finalAmount}
             onExtracted={({ utr, amount: extAmount, screenshotBlob: blob, previewUrl }) => {
               setScreenshotBlob(blob)
               setScreenshotPreview(previewUrl)
-              if (utr) setUpiRef(utr)
-              if (extAmount && !customAmount) {
-                if (extAmount !== amount) {
+
+              if (utr) {
+                setUpiRef(utr)
+                setUtrAutoFilled(true)
+              }
+
+              if (extAmount) {
+                // If extracted matches a preset, use that
+                const preset = [100, 200, 500, 1000].find((p) => p === extAmount)
+                if (preset) {
+                  setAmount(preset)
+                  setCustomAmount('')
+                } else {
                   setCustomAmount(String(extAmount))
                 }
+                setAmountAutoFilled(true)
               }
             }}
           />
@@ -213,21 +262,35 @@ export function RechargeModal({ open, onClose, upiId }: Props) {
 
         {/* UTR input */}
         <div className="mb-3">
-          <label className="text-[10px] text-gray-500 tracking-wider">
-            UTR / REFERENCE NUMBER *
+          <label className="text-[10px] text-gray-500 tracking-wider flex items-center justify-between">
+            <span>UTR / REFERENCE NUMBER *</span>
+            {utrAutoFilled && (
+              <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-green-500/15 border border-green-500/40 text-green-300">
+                ✓ AUTO-FILLED
+              </span>
+            )}
           </label>
           <input
             type="text"
             value={upiRef}
-            onChange={(e) => setUpiRef(e.target.value)}
+            onChange={(e) => {
+              setUpiRef(e.target.value)
+              setUtrAutoFilled(false) // user edited → remove chip
+            }}
             placeholder="Auto-filled from screenshot, or type manually"
-            className="w-full mt-1 bg-[#0a0a0f] border border-white/10 rounded-xl px-3 py-2.5 text-sm font-mono"
+            className={`w-full mt-1 bg-[#0a0a0f] border rounded-xl px-3 py-2.5 text-sm font-mono transition ${
+              utrAutoFilled
+                ? 'border-green-500/40 bg-green-500/5 text-green-200'
+                : 'border-white/10'
+            }`}
           />
         </div>
 
         {/* UPI app picker */}
         <div className="mb-3">
-          <label className="text-[10px] text-gray-500 tracking-wider">UPI APP (optional)</label>
+          <label className="text-[10px] text-gray-500 tracking-wider">
+            UPI APP (optional)
+          </label>
           <div className="grid grid-cols-4 gap-2 mt-1">
             {['GPay', 'PhonePe', 'Paytm', 'Other'].map((app) => (
               <button
@@ -246,7 +309,7 @@ export function RechargeModal({ open, onClose, upiId }: Props) {
         </div>
 
         <div className="rounded-xl bg-amber-500/5 border border-amber-500/30 p-3 text-xs text-amber-200 mb-4">
-          ⓘ Screenshot auto-extracts UTR. Wallet credited after admin verifies.
+          ⓘ Screenshot auto-extracts UTR & amount. Admin verifies before crediting.
         </div>
 
         <button
@@ -254,9 +317,11 @@ export function RechargeModal({ open, onClose, upiId }: Props) {
           disabled={busy || uploading}
           className="w-full py-3 rounded-xl bg-gradient-to-r from-cyan-500 to-pink-500 text-white font-bold disabled:opacity-50"
         >
-          {uploading ? 'Uploading screenshot...'
-           : busy ? 'Submitting...'
-           : `Submit ₹${finalAmount || 0} for Review`}
+          {uploading
+            ? 'Uploading screenshot...'
+            : busy
+            ? 'Submitting...'
+            : `Submit ₹${finalAmount || 0} for Review`}
         </button>
       </div>
     </div>
