@@ -6,6 +6,8 @@ import { ToastContainer } from '@/components/ui/Toast'
 import { createClient } from '@/lib/supabase/server'
 import { RealtimeToasts } from '@/components/RealtimeToasts'
 
+export const instant = false
+
 const font = Chakra_Petch({
   subsets: ['latin'],
   variable: '--font-orbitron',
