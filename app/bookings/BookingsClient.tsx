@@ -62,7 +62,8 @@ export function BookingsClient({ bookings, settings, walletBalance, timeCredit }
 
   // Update clock every 30s so time-based actions re-evaluate
   useEffect(() => {
-    setNow(Date.now())`n    const t = setInterval(() => setNow(Date.now()), 30000)
+    setNow(Date.now())
+    const t = setInterval(() => setNow(Date.now()), 30000)
     return () => clearInterval(t)
   }, [])
 
@@ -420,7 +421,8 @@ function ActiveSessionTimer({ slotStart, slotEnd }: { slotStart: string; slotEnd
   const [now, setNow] = useState(0)
 
   useEffect(() => {
-    setNow(Date.now())`n    const t = setInterval(() => setNow(Date.now()), 1000)
+    setNow(Date.now())
+    const t = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(t)
   }, [])
 
