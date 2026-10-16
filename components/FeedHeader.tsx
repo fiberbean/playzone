@@ -1,8 +1,10 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { NotificationBell } from '@/components/NotificationBell'
+import { formatINR } from '@/lib/utils/money'
 
 type Profile = {
   id: string
@@ -11,6 +13,7 @@ type Profile = {
   avatar_url: string | null
   role: string
   wallet_balance: number
+  time_credit_min?: number
 }
 
 export default function FeedHeader({ profile }: { profile: Profile | null }) {
@@ -39,15 +42,19 @@ export default function FeedHeader({ profile }: { profile: Profile | null }) {
             </h1>
           </div>
 
-          {/* Menu Button */}
-          <button
-            onClick={() => setMenuOpen(true)}
-            className="w-10 h-10 flex items-center justify-center rounded-xl bg-[#12121a] border border-cyan-500/30 hover:border-cyan-500/60 transition"
-          >
-            <svg className="w-5 h-5 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-            </svg>
-          </button>
+          {/* Right side: bell + hamburger */}
+          <div className="flex items-center gap-2">
+            {profile?.id && <NotificationBell userId={profile.id} />}
+
+            <button
+              onClick={() => setMenuOpen(true)}
+              className="w-10 h-10 flex items-center justify-center rounded-xl bg-[#12121a] border border-cyan-500/30 hover:border-cyan-500/60 transition"
+            >
+              <svg className="w-5 h-5 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            </button>
+          </div>
         </div>
       </header>
 
@@ -95,19 +102,36 @@ export default function FeedHeader({ profile }: { profile: Profile | null }) {
                 </div>
               </div>
 
-              <div className="mt-4 bg-gradient-to-r from-cyan-500/10 to-pink-500/10 border border-cyan-500/30 rounded-xl p-3">
-                <p className="text-xs text-gray-400">Wallet Balance</p>
-                <p className="text-xl sm:text-2xl font-bold text-cyan-400">
-                  ₹{profile?.wallet_balance ?? 0}
-                </p>
+              {/* Wallet + time credit */}
+              <div className="mt-4 space-y-2">
+                <div className="bg-gradient-to-r from-cyan-500/10 to-pink-500/10 border border-cyan-500/30 rounded-xl p-3">
+                  <p className="text-xs text-gray-400">Wallet Balance</p>
+                  <p className="text-xl sm:text-2xl font-bold text-cyan-400">
+                    {formatINR(Number(profile?.wallet_balance ?? 0))}
+                  </p>
+                </div>
+
+                {(profile?.time_credit_min ?? 0) > 0 && (
+                  <div className="bg-pink-500/10 border border-pink-500/30 rounded-xl p-3">
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <p className="text-xs text-pink-300">⏱ Time Credit</p>
+                        <p className="text-lg font-bold text-white">
+                          {profile?.time_credit_min} min
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
             <nav className="p-2 sm:p-3">
               <MenuItem icon="🏠" label="Feed" onClick={() => { setMenuOpen(false); router.push('/') }} />
               <MenuItem icon="🎮" label="Book Session" onClick={() => { setMenuOpen(false); router.push('/book') }} />
-              <MenuItem icon="💰" label="Wallet" onClick={() => { setMenuOpen(false); router.push('/wallet') }} />
               <MenuItem icon="📜" label="My Bookings" onClick={() => { setMenuOpen(false); router.push('/bookings') }} />
+              <MenuItem icon="💰" label="Wallet" onClick={() => { setMenuOpen(false); router.push('/wallet') }} />
+              <MenuItem icon="🔔" label="Notifications" onClick={() => { setMenuOpen(false); router.push('/notifications') }} />
               <MenuItem icon="👤" label="Profile" onClick={() => { setMenuOpen(false); router.push('/profile') }} />
 
               {profile?.role === 'admin' && (

@@ -1,29 +1,13 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
-import { connection } from 'next/server'
 import FeedHeader from '@/components/FeedHeader'
 import PostCard from '@/components/PostCard'
+import FeedRealtime from '@/components/FeedRealtime'
 
+// Auth page — prathi user ki different data, so blocking route correct
 export const instant = false
 
-type BadgeColor = 'cyan' | 'pink' | 'yellow' | 'green'
-
-type Post = {
-  id: string
-  author_name: string
-  author_avatar: string | null
-  created_at: string
-  image_url: string | null
-  caption: string
-  likes: number
-  comments: number
-  badge?: string
-  badge_color?: BadgeColor
-}
-
 export default async function HomePage() {
-  await connection()
-
   const supabase = await createClient()
 
   const {
@@ -38,48 +22,58 @@ export default async function HomePage() {
     .from('profiles')
     .select('*')
     .eq('id', user.id)
-    .single()
+    .maybeSingle()
 
-  const now = Date.now()
+  const { data: posts, error: postsError } = await supabase
+    .from('posts')
+    .select(`
+      id,
+      caption,
+      image_url,
+      badge,
+      badge_color,
+      likes_count,
+      comments_count,
+      created_at,
+      user_id,
+      profiles:user_id (
+        full_name,
+        avatar_url
+      )
+    `)
+    .order('created_at', { ascending: false })
+    .limit(50)
 
-  const placeholderPosts: Post[] = [
-    {
-      id: '1',
-      author_name: 'Play Zone Admin',
-      author_avatar: null,
-      created_at: new Date(now).toISOString(),
-      image_url: null,
-      badge: 'NEW',
-      badge_color: 'cyan',
-      caption: '🎮 New PS5 console added! Book your slot now. Weekend lo rush untundi — advance booking cheyandi!',
-      likes: 24,
-      comments: 5,
-    },
-    {
-      id: '2',
-      author_name: 'Play Zone Admin',
-      author_avatar: null,
-      created_at: new Date(now - 3600000).toISOString(),
-      image_url: null,
-      badge: 'TOURNAMENT',
-      badge_color: 'pink',
-      caption: '🏆 FIFA 26 Tournament — ee Sunday 5 PM. Entry ₹200. Winner ki ₹2000 prize! Register at counter.',
-      likes: 48,
-      comments: 12,
-    },
-    {
-      id: '3',
-      author_name: 'Play Zone Admin',
-      author_avatar: null,
-      created_at: new Date(now - 86400000).toISOString(),
-      image_url: null,
-      badge: 'OFFER',
-      badge_color: 'yellow',
-      caption: '⚡ Happy Hours: 12 PM - 3 PM. 30% off on all bookings. Grab your slot!',
-      likes: 67,
-      comments: 8,
-    },
-  ]
+  // Debug
+  console.log('===== POSTS DEBUG =====')
+  console.log('POSTS COUNT:', posts?.length)
+  console.log('POSTS ERROR:', postsError)
+  console.log('===== END =====')
+
+  const postIds = posts?.map((p) => p.id) ?? []
+  const { data: userLikes } = await supabase
+    .from('likes')
+    .select('post_id')
+    .eq('user_id', user.id)
+    .in('post_id', postIds.length > 0 ? postIds : ['00000000-0000-0000-0000-000000000000'])
+
+  const likedPostIds = new Set(userLikes?.map((l) => l.post_id) ?? [])
+
+  const formattedPosts =
+    posts?.map((post) => ({
+      id: post.id,
+      author_name: (post.profiles as any)?.full_name ?? 'User',
+      author_avatar: (post.profiles as any)?.avatar_url ?? null,
+      created_at: post.created_at,
+      image_url: post.image_url,
+      caption: post.caption ?? '',
+      likes: post.likes_count ?? 0,
+      comments: post.comments_count ?? 0,
+      badge: post.badge,
+      badge_color: post.badge_color,
+      is_liked: likedPostIds.has(post.id),
+      user_id: post.user_id,
+    })) ?? []
 
   return (
     <div className="min-h-screen bg-[#0a0a0f] text-white relative">
@@ -111,12 +105,30 @@ export default async function HomePage() {
             </p>
           </div>
 
-          <div className="space-y-4 sm:space-y-6">
-            {placeholderPosts.map((post) => (
-              <PostCard key={post.id} post={post} />
-            ))}
-          </div>
+          {formattedPosts.length > 0 ? (
+            <div className="space-y-4 sm:space-y-6">
+              {formattedPosts.map((post) => (
+                <PostCard
+                  key={post.id}
+                  post={post}
+                  currentUserId={user.id}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-20">
+              <div className="inline-flex items-center justify-center w-20 h-20 bg-gradient-to-br from-cyan-400 to-pink-500 rounded-2xl mb-6 shadow-lg shadow-cyan-500/50">
+                <span className="text-4xl">🎮</span>
+              </div>
+              <h2 className="text-xl font-bold mb-2">No Posts Yet</h2>
+              <p className="text-gray-400 text-sm">
+                Admin post create chesaka ikkada kanipistundi
+              </p>
+            </div>
+          )}
         </main>
+
+        <FeedRealtime />
       </div>
     </div>
   )

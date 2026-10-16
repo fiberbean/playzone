@@ -1,6 +1,10 @@
+// app/layout.tsx
 import type { Metadata } from 'next'
 import { Chakra_Petch } from 'next/font/google'
 import './globals.css'
+import { ToastContainer } from '@/components/ui/Toast'
+import { createClient } from '@/lib/supabase/server'
+import { RealtimeToasts } from '@/components/RealtimeToasts'
 
 const font = Chakra_Petch({
   subsets: ['latin'],
@@ -14,14 +18,21 @@ export const metadata: Metadata = {
   description: 'Play • Compete • Repeat',
 }
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+
   return (
     <html lang="en" className={font.variable}>
-      <body>{children}</body>
+      <body>
+        {children}
+        {user && <RealtimeToasts userId={user.id} />}
+        <ToastContainer />
+      </body>
     </html>
   )
 }
