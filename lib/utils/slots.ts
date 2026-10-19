@@ -4,41 +4,29 @@ import { buildISTDate, getISTParts } from './time';
 export interface SlotDef {
   start: Date;
   end: Date;
-  /** e.g. "9:00 AM" */
   label: string;
-  /** minutes since midnight IST */
   startMin: number;
-  /** true if within past (before now) */
   isPast: boolean;
-  /** true if marked booked by existing bookings */
   isBooked: boolean;
-  /** true if marked pending (soft lock) */
   isPending: boolean;
-  /** true if under maintenance for that console */
   isMaintenance: boolean;
 }
 
 export interface BookedRange {
-  start: string; // ISO
-  end: string;   // ISO
+  start: string;
+  end: string;
   status: 'pending' | 'confirmed' | 'active' | 'maintenance';
 }
 
 export interface GenerateSlotsOptions {
-  /** YYYY-MM-DD in IST */
   date: string;
   openHour: number;
   closeHour: number;
   slotMinutes: number;
   bookedRanges: BookedRange[];
-  /** Pass null to skip "past" flagging (e.g. admin views) */
   nowOverride?: Date | null;
 }
 
-/**
- * Generate all possible start slots for a given day.
- * Marks each as free / booked / pending / maintenance / past.
- */
 export function generateSlots(opts: GenerateSlotsOptions): SlotDef[] {
   const {
     date, openHour, closeHour, slotMinutes,
@@ -65,7 +53,6 @@ export function generateSlots(opts: GenerateSlotsOptions): SlotDef[] {
 
     const isPast = now !== null && start.getTime() < now.getTime();
 
-    // Check overlap with any booked range
     let isBooked = false;
     let isPending = false;
     let isMaintenance = false;
@@ -97,10 +84,6 @@ export function generateSlots(opts: GenerateSlotsOptions): SlotDef[] {
   return slots;
 }
 
-/**
- * Check if a booking of given duration starting at `start` is possible
- * (no overlap with booked ranges).
- */
 export function canBookFrom(
   start: Date,
   durationMin: number,
@@ -131,13 +114,55 @@ export function validDurations(
   bookedRanges: BookedRange[]
 ): number[] {
   const result: number[] = [];
+
+  // ─── Defensive coercion ──────────────────────────────────────────
+  const closeHourN = Number(closeHour);
+  const slotMinutesN = Number(slotMinutes);
+  const minDurN = Number(minDur);
+  const maxDurN = Number(maxDur);
+
+  // Sanity check — if any are NaN, return empty
+  if (
+    Number.isNaN(closeHourN) ||
+    Number.isNaN(slotMinutesN) ||
+    Number.isNaN(minDurN) ||
+    Number.isNaN(maxDurN)
+  ) {
+    console.warn('[validDurations] NaN detected in arguments', {
+      closeHour, slotMinutes, minDur, maxDur,
+    });
+    return [];
+  }
+
   const parts = getISTParts(start);
   const startMin = parts.hour * 60 + parts.minute;
-  const closeMin = closeHour * 60;
+  const closeMin = closeHourN * 60;
   const availableMin = closeMin - startMin;
 
-  for (let d = minDur; d <= Math.min(maxDur, availableMin); d += slotMinutes) {
-    if (canBookFrom(start, d, bookedRanges)) result.push(d);
+  // ─── Debug log (remove after bug is fixed) ───────────────────────
+  console.log('[validDurations] input', {
+    startISO: start.toISOString(),
+    parts,
+    startMin,
+    closeHour: closeHourN,
+    closeMin,
+    availableMin,
+    minDur: minDurN,
+    maxDur: maxDurN,
+    slotMinutes: slotMinutesN,
+    bookedRanges: bookedRanges.map((r) => ({
+      start: r.start,
+      end: r.end,
+      status: r.status,
+    })),
+  })
+  // ────────────────────────────────────────────────────────────────
+
+  for (let d = minDurN; d <= Math.min(maxDurN, availableMin); d += slotMinutesN) {
+    const canBook = canBookFrom(start, d, bookedRanges);
+    if (canBook) result.push(d);
   }
+
+  console.log('[validDurations] result =', result)
   return result;
 }

@@ -41,3 +41,54 @@ export function formatSigned(amount: number, type: 'credit' | 'debit'): string {
   const sign = type === 'credit' ? '+' : '−';
   return `${sign}${formatINR(Math.abs(amount))}`;
 }
+
+// lib/utils/money.ts
+
+export function getPlayerRate(
+  playerRates: Record<string, number> | null | undefined,
+  pricingMode: 'flat' | 'pct_discount' | 'amt_discount' | string | null | undefined,
+  players: number,
+  fallbackRate: number = 0
+): number {
+  if (!playerRates) return fallbackRate
+  const key = String(players)
+  const val = Number(playerRates[key] ?? 0)
+
+  // Mode: Flat — direct rate per count
+  if (!pricingMode || pricingMode === 'flat') {
+    return val > 0 ? val : fallbackRate
+  }
+
+  // For discount modes, player_rates['1'] = base rate
+  const baseRate = Number(playerRates['1'] ?? fallbackRate)
+  if (players === 1) return baseRate
+
+  // Mode: % Discount
+  if (pricingMode === 'pct_discount') {
+    const disc = Math.min(Math.max(val, 0), 100)
+    return Math.round(baseRate * (1 - disc / 100))
+  }
+
+  // Mode: ₹ Discount
+  if (pricingMode === 'amt_discount') {
+    const off = Math.min(Math.max(val, 0), baseRate)
+    return Math.max(baseRate - off, 0)
+  }
+
+  return baseRate
+}
+
+// lib/utils/money.ts
+
+export function getDiscountInfo(baseRate: number, offerRate: number): {
+  hasDiscount: boolean
+  amount: number
+  pct: number
+} {
+  if (!baseRate || !offerRate || offerRate >= baseRate) {
+    return { hasDiscount: false, amount: 0, pct: 0 }
+  }
+  const amount = baseRate - offerRate
+  const pct = Math.round((amount / baseRate) * 100)
+  return { hasDiscount: true, amount, pct }
+}

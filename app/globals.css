@@ -13,18 +13,91 @@ body {
   font-family: var(--font-orbitron), sans-serif;
 }
 
-/* Hide scrollbar on admin sidebar */
-.sidebar-scroll {
-  scrollbar-width: none;         /* Firefox */
-  -ms-overflow-style: none;      /* IE/Edge */
+/* ============================================================
+   SITE-WIDE SCROLLBAR HIDE (all elements, all browsers)
+   ============================================================ */
+
+/* Universal — hide scrollbar on every element */
+* {
+  scrollbar-width: none;           /* Firefox */
+  -ms-overflow-style: none;         /* IE/Edge */
 }
-.sidebar-scroll::-webkit-scrollbar {
-  display: none;                 /* Chrome/Safari */
+*::-webkit-scrollbar {
+  display: none;                    /* Chrome/Safari/Webkit */
+  width: 0;
+  height: 0;
+  background: transparent;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: transparent;
 }
 
-/* Prevent horizontal overflow site-wide */
+/* ============================================================
+   Admin sidebar scroll — explicit (kept for compatibility)
+   ============================================================ */
+.sidebar-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.sidebar-scroll::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/* ============================================================
+   Modal scroll — hide scrollbar explicitly
+   ============================================================ */
+.hide-scroll {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.hide-scroll::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  background: transparent !important;
+}
+.hide-scroll::-webkit-scrollbar-track,
+.hide-scroll::-webkit-scrollbar-thumb,
+.hide-scroll::-webkit-scrollbar-corner {
+  display: none !important;
+  background: transparent !important;
+}
+
+/* ============================================================
+   Prevent horizontal overflow site-wide
+   ============================================================ */
 html, body {
   overflow-x: hidden;
   max-width: 100vw;
 }
 
+/* ============================================================
+   Optional: Focus ring for keyboard nav (accessibility)
+   ============================================================ */
+:focus-visible {
+  outline: 2px solid rgba(34, 211, 238, 0.6);
+  outline-offset: 2px;
+}
+
+/* ============================================================
+   Selection color
+   ============================================================ */
+::selection {
+  background: rgba(34, 211, 238, 0.3);
+  color: #fff;
+}
+
+@layer utilities {
+  @keyframes laser-flow {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+  }
+  .animate-laser {
+    animation: laser-flow 1.5s infinite linear;
+  }
+}

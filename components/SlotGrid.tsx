@@ -1,68 +1,101 @@
 // components/SlotGrid.tsx
-'use client';
+'use client'
 
-import type { SlotDef } from '@/lib/utils/slots';
+import { formatTime } from '@/lib/utils/time'
+import type { Slot } from '@/lib/utils/slots'
 
 interface Props {
-  slots: SlotDef[];
-  selectedStart: Date | null;
-  onSelect: (start: Date) => void;
-  disabled?: boolean;
+  slots: Slot[]
+  selectedStart: Date | null
+  selectedEnd?: Date | null
+  onSelect: (start: Date) => void
 }
 
-export function SlotGrid({ slots, selectedStart, onSelect, disabled }: Props) {
-  // Group: morning (<12), afternoon (12–17), evening (>=17)
-  const groups = {
-    Morning: slots.filter((s) => s.startMin < 12 * 60),
-    Afternoon: slots.filter((s) => s.startMin >= 12 * 60 && s.startMin < 17 * 60),
-    Evening: slots.filter((s) => s.startMin >= 17 * 60),
-  };
+export function SlotGrid({ slots, selectedStart, selectedEnd, onSelect }: Props) {
+  if (slots.length === 0) {
+    return (
+      <div className="text-center py-6 text-xs text-gray-500">
+        No slots available
+      </div>
+    )
+  }
+
+  const nowMs = Date.now()
+  const startMs = selectedStart?.getTime() ?? null
+  const endMs = selectedEnd?.getTime() ?? null
 
   return (
-    <div className="space-y-4">
-      {Object.entries(groups).map(([label, group]) => (
-        group.length === 0 ? null : (
-          <div key={label}>
-            <div className="text-xs uppercase tracking-wide text-neutral-500 mb-2">{label}</div>
-            <div className="grid grid-cols-4 gap-2">
-              {group.map((slot) => {
-                const selected = selectedStart?.getTime() === slot.start.getTime();
-                const unavailable = slot.isPast || slot.isBooked || slot.isMaintenance;
-                const pending = slot.isPending;
+    <div className="flex flex-wrap gap-y-2 gap-x-0 relative">
+      {slots.map((slot, i) => {
+        const slotTime = slot.start.getTime()
+        const isPastSlot = slotTime <= nowMs
+        const disabled = isPastSlot || slot.isBooked || slot.isPending || slot.isMaintenance
 
-                let cls =
-                  'rounded-lg border p-2 text-xs font-medium transition text-center';
-                if (unavailable) {
-                  cls += ' bg-neutral-900 border-neutral-800 text-neutral-600 cursor-not-allowed line-through';
-                } else if (pending && !selected) {
-                  cls += ' bg-amber-500/10 border-amber-500/40 text-amber-300';
-                } else if (selected) {
-                  cls += ' bg-cyan-500 border-cyan-400 text-white';
-                } else {
-                  cls += ' bg-neutral-900 border-neutral-700 text-white hover:border-cyan-500/60';
-                }
+        const isStart = startMs !== null && slotTime === startMs
+        const isEnd = endMs !== null && slotTime === endMs
+        const isInRange = startMs !== null && endMs !== null && slotTime > startMs && slotTime < endMs
 
-                return (
-                  <button
-                    key={slot.start.toISOString()}
-                    disabled={disabled || unavailable}
-                    onClick={() => onSelect(slot.start)}
-                    className={cls}
-                  >
-                    {slot.label}
-                  </button>
-                );
-              })}
-            </div>
+        // Determine if this slot is the last one in a row to handle borders properly
+        // Note: using CSS calc for responsive widths
+        let cls = 'relative flex-shrink-0 flex flex-col items-center justify-center h-16 sm:h-20 w-[calc(25%)] sm:w-[calc(16.666%)] md:w-[calc(12.5%)] transition-all '
+        
+        // Train Effect: No gaps for Start, Middle, End. Standard gap for normal slots.
+        // Using -ml-[1px] to overlap borders for a continuous line.
+        
+        if (isStart) {
+          cls += 'bg-gradient-to-r from-cyan-600/40 to-cyan-500/10 border-y-2 border-l-2 border-cyan-400 rounded-l-lg z-20 pl-1 '
+        } else if (isEnd) {
+          cls += 'bg-gradient-to-r from-pink-500/10 to-pink-600/40 border-y-2 border-r-2 border-pink-400 rounded-r-lg z-20 pr-1 '
+        } else if (isInRange) {
+          // The continuous middle part
+          cls += 'bg-purple-500/20 border-y-2 border-purple-500/30 border-x-0 z-10 '
+        } else {
+          // Free or unavailable slots keep their spacing
+          cls += 'px-1 '
+        }
+
+        const label = formatTime(slot.start.toISOString())
+        const [time, meridiem] = label.split(' ')
+
+        return (
+          <div key={slot.start.toISOString()} className={`relative ${cls}`}>
+            <button
+              type="button"
+              onClick={() => !disabled && onSelect(slot.start)}
+              disabled={disabled}
+              className={`w-[calc(100%-6px)] h-[calc(100%-6px)] flex flex-col items-center justify-center rounded-lg transition-all active:scale-[0.95] ${
+                slot.isMaintenance ? 'bg-red-500/10 text-red-400 border border-red-500/30' :
+                slot.isBooked ? 'bg-green-500/15 text-green-300 border border-green-500/30' :
+                slot.isPending ? 'bg-yellow-500/15 text-yellow-300 border border-yellow-500/30' :
+                isPastSlot ? 'bg-white/5 text-gray-600 border border-white/10 line-through' :
+                (isStart || isEnd || isInRange) ? 'bg-transparent border-none text-white z-10' :
+                'bg-[#12121a] border border-white/10 text-gray-200 hover:border-cyan-500/40'
+              }`}
+            >
+              {/* IN / OUT Badges */}
+              {isStart && (
+                <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-cyan-500 text-black text-[9px] font-black px-1.5 py-0.5 rounded-full shadow-md z-20">
+                  IN
+                </span>
+              )}
+              {isEnd && (
+                <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-pink-500 text-black text-[9px] font-black px-1.5 py-0.5 rounded-full shadow-md z-20">
+                  OUT
+                </span>
+              )}
+
+              <span className={`text-xs sm:text-sm font-bold ${isStart || isEnd ? 'mt-1' : ''}`}>
+                {time}
+              </span>
+              {meridiem && (
+                <span className="text-[9px] sm:text-[10px] opacity-70 mt-0.5 font-medium">
+                  {meridiem}
+                </span>
+              )}
+            </button>
           </div>
         )
-      ))}
-      <div className="flex gap-4 text-xs text-neutral-500 pt-2">
-        <span>🟩 Free</span>
-        <span>⬜ Booked</span>
-        <span>🟨 Pending</span>
-        <span>🔧 Maintenance</span>
-      </div>
+      })}
     </div>
-  );
+  )
 }

@@ -17,6 +17,7 @@ import { ConfirmActionModal } from '@/components/ui/ConfirmActionModal'
 import { BlockedActionModal } from '@/components/ui/BlockedActionModal'
 import { toast } from '@/components/ui/Toast'
 import { cancelBooking, rescheduleBooking } from '@/lib/actions/bookings'
+import { QRCodeSVG } from 'qrcode.react'
 
 type Tab = 'upcoming' | 'past'
 
@@ -59,8 +60,8 @@ export function BookingsClient({ bookings, settings, walletBalance, timeCredit }
   const [tab, setTab] = useState<Tab>('upcoming')
   const [local, setLocal] = useState(bookings)
   const [now, setNow] = useState(0)
+  const [activeQrBooking, setActiveQrBooking] = useState<Booking | null>(null)
 
-  // Update clock every 30s so time-based actions re-evaluate
   useEffect(() => {
     setNow(Date.now())
     const t = setInterval(() => setNow(Date.now()), 30000)
@@ -168,7 +169,7 @@ export function BookingsClient({ bookings, settings, walletBalance, timeCredit }
             )}
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-4">
             {shown.map((b) => (
               <BookingCard
                 key={b.id}
@@ -180,17 +181,25 @@ export function BookingsClient({ bookings, settings, walletBalance, timeCredit }
                 onUpdate={(updated) => {
                   setLocal((prev) => prev.map((x) => (x.id === updated.id ? updated : x)))
                 }}
+                onQrClick={() => setActiveQrBooking(b)}
               />
             ))}
           </div>
         )}
       </main>
+
+      {activeQrBooking && (
+        <CheckinModal
+          booking={activeQrBooking}
+          onClose={() => setActiveQrBooking(null)}
+        />
+      )}
     </div>
   )
 }
 
 function BookingCard({
-  booking, settings, walletBalance, timeCredit, now, onUpdate,
+  booking, settings, walletBalance, timeCredit, now, onUpdate, onQrClick,
 }: {
   booking: Booking
   settings: any
@@ -198,6 +207,7 @@ function BookingCard({
   timeCredit: number
   now: number
   onUpdate: (b: Booking) => void
+  onQrClick: () => void
 }) {
   const [cancelOpen, setCancelOpen] = useState(false)
   const [rescheduleOpen, setRescheduleOpen] = useState(false)
@@ -218,7 +228,7 @@ function BookingCard({
     if (!cancelable) {
       setBlocked({
         title: '🚫 Cancellation Not Available',
-        message: `Your session starts at ${formatTime(booking.slot_start)}.\n\nCancellation is allowed only up to ${cutoffHours} hours before start (${formatTime(cutoffTime)}).\n\nContact admin for special requests.`,
+        message: `Your session starts at ${formatTime(booking.slot_start)}.\n\nCancellation is allowed only up to ${cutoffHours} hours before start (${formatTime(cutoffTime)}).\n\nContact Play Zone for special requests.`,
       })
       return
     }
@@ -242,7 +252,6 @@ function BookingCard({
       await cancelBooking(booking.id, reason)
       toast.success('Cancelled', 'Refund credited to wallet')
       setCancelOpen(false)
-      // Will update via realtime
     } catch (e) {
       toast.error('Failed', e instanceof Error ? e.message : '')
     } finally {
@@ -253,10 +262,14 @@ function BookingCard({
   const feePct = settings.cancellation_fee_pct as number
   const { fee, refund } = calcCancellation(booking.amount, feePct)
 
+  const checkinUrl = typeof window !== 'undefined' 
+    ? `${window.location.origin}/checkin/${booking.id}` 
+    : `/checkin/${booking.id}`;
+
   return (
-    <div className="bg-gradient-to-br from-[#12121a] to-[#0a0a0f] border border-cyan-500/20 rounded-2xl overflow-hidden">
-      {/* Top strip */}
-      <div className="flex items-center gap-3 p-3 border-b border-white/5">
+    <div className="bg-gradient-to-br from-[#12121a] to-[#0a0a0f] border border-cyan-500/20 rounded-2xl overflow-hidden shadow-xl">
+      
+      <div className="flex items-center gap-3 p-4 border-b border-white/5">
         <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-cyan-500/30 to-pink-500/30 flex items-center justify-center overflow-hidden shrink-0">
           {booking.game?.image_url ? (
             <img src={booking.game.image_url} alt="" className="w-full h-full object-cover" />
@@ -275,28 +288,46 @@ function BookingCard({
         <StatusBadge status={booking.status} />
       </div>
 
-      {/* Body */}
-      <div className="p-3 space-y-2">
-        <div className="flex justify-between text-xs">
-          <span className="text-gray-500">Duration</span>
-          <span className="text-white">{formatDuration(booking.duration_min)}</span>
-        </div>
-        <div className="flex justify-between text-xs">
-          <span className="text-gray-500">Players</span>
-          <span className="text-white">
-            {booking.players} {booking.rate_type === 'single' ? '(single)' : '(multi)'}
-          </span>
-        </div>
-        <div className="flex justify-between text-xs">
-          <span className="text-gray-500">Amount</span>
-          <span className="text-cyan-400 font-bold">{formatINR(booking.amount)}</span>
+      <div className="p-4 flex gap-4">
+        <div className="flex-1 space-y-2">
+          <div className="flex justify-between text-xs">
+            <span className="text-gray-500">Duration</span>
+            <span className="text-white">{formatDuration(booking.duration_min)}</span>
+          </div>
+          <div className="flex justify-between text-xs">
+            <span className="text-gray-500">Players</span>
+            <span className="text-white">
+              {booking.players} {booking.rate_type === 'single' ? '(single)' : '(multi)'}
+            </span>
+          </div>
+          <div className="flex justify-between text-xs">
+            <span className="text-gray-500">Amount</span>
+            <span className="text-cyan-400 font-bold">{formatINR(booking.amount)}</span>
+          </div>
         </div>
 
+        {['confirmed', 'pending'].includes(booking.status) && (
+          <button 
+            onClick={onQrClick}
+            type="button"
+            className="w-24 h-24 bg-white rounded-lg p-1 shrink-0 flex flex-col items-center justify-center hover:ring-4 ring-cyan-500/50 transition cursor-pointer"
+            title="Click to enlarge"
+          >
+            <QRCodeSVG value={checkinUrl} size={80} />
+            <div className="text-[8px] text-black font-bold mt-1">Tap to scan</div>
+          </button>
+        )}
+      </div>
+
+      <div className="px-4 pb-2 text-[10px] text-gray-600 font-mono">
+        Booking ID: #{booking.id.slice(0, 8).toUpperCase()}
+      </div>
+
+      <div className="px-4 pb-4 space-y-2">
         {booking.status === 'cancelled' && (
           <div className="rounded-lg bg-red-500/5 border border-red-500/20 p-2 text-[11px] text-red-300 space-y-0.5">
             <div>Cancelled — {formatINR(booking.cancellation_fee)} fee</div>
             <div>Refunded: {formatINR(booking.refund_amount)}</div>
-            {booking.cancel_reason && <div className="italic">"{booking.cancel_reason}"</div>}
           </div>
         )}
 
@@ -323,7 +354,6 @@ function BookingCard({
         )}
       </div>
 
-      {/* Actions */}
       {['pending', 'confirmed'].includes(booking.status) && (
         <div className="p-3 border-t border-white/5 flex gap-2">
           <button
@@ -343,7 +373,6 @@ function BookingCard({
         </div>
       )}
 
-      {/* Cancel modal */}
       <ConfirmActionModal
         open={cancelOpen}
         title="⚠ Cancel Booking"
@@ -373,7 +402,6 @@ function BookingCard({
         onCancel={() => setCancelOpen(false)}
       />
 
-      {/* Reschedule modal */}
       {rescheduleOpen && (
         <RescheduleFlow
           booking={booking}
@@ -383,18 +411,84 @@ function BookingCard({
           onClose={() => setRescheduleOpen(false)}
           onComplete={() => {
             setRescheduleOpen(false)
-            toast.success('Rescheduled', 'Awaiting admin confirmation')
+            toast.success('Rescheduled', 'Your session has been moved')
           }}
         />
       )}
 
-      {/* Blocked modal */}
       <BlockedActionModal
         open={!!blocked}
         title={blocked?.title ?? ''}
         message={blocked?.message ?? ''}
         onClose={() => setBlocked(null)}
       />
+    </div>
+  )
+}
+
+function CheckinModal({ booking, onClose }: { booking: Booking, onClose: () => void }) {
+  const [code, setCode] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  const checkinUrl = typeof window !== 'undefined' 
+    ? `${window.location.origin}/checkin/${booking.id}` 
+    : `/checkin/${booking.id}`;
+
+  useEffect(() => {
+    const supabase = createClient()
+    const channel = supabase
+      .channel(`checkin-code-${booking.id}-${Math.random().toString(36).slice(2)}`)
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'scan_challenges', filter: `booking_id=eq.${booking.id}` },
+        (payload) => {
+          if (payload.new && (payload.new as any).code) {
+            setCode((payload.new as any).code)
+            setLoading(false)
+          }
+        }
+      )
+      .subscribe()
+
+    return () => { supabase.removeChannel(channel) }
+  }, [booking.id])
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
+      <div className="w-full max-w-sm rounded-2xl border border-cyan-500/40 bg-[#12121a] p-6 shadow-2xl text-center relative">
+        <button 
+          onClick={onClose}
+          className="absolute top-3 right-3 text-gray-400 hover:text-white text-xl"
+        >
+          ✕
+        </button>
+        
+        <h2 className="text-lg font-bold text-white mb-1">Check-in QR</h2>
+        <p className="text-xs text-gray-400 mb-6">Scan at the Play Zone counter</p>
+        
+        <div className="bg-white p-3 rounded-xl inline-block mb-4 shadow-lg">
+          <QRCodeSVG value={checkinUrl} size={200} />
+        </div>
+
+        {code ? (
+          <div className="mt-4 p-4 rounded-xl bg-green-500/10 border border-green-500/30">
+            <div className="text-xs text-green-300 font-bold uppercase tracking-wider mb-1">Verification Code</div>
+            <div className="text-4xl font-black text-white tracking-[0.2em] tabular-nums">
+              {code}
+            </div>
+            <div className="text-[10px] text-green-400 mt-2">Show this code to Play Zone staff</div>
+          </div>
+        ) : (
+          <div className="mt-4 p-3 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center gap-2">
+            {loading ? (
+              <span className="text-xs text-cyan-300 animate-pulse">Generating secure code...</span>
+            ) : (
+              <span className="text-xs text-cyan-300 animate-pulse">
+                Please wait, Play Zone is verifying your check-in...
+              </span>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -441,8 +535,6 @@ function ActiveSessionTimer({ slotStart, slotEnd }: { slotStart: string; slotEnd
   )
 }
 
-// ---------- Reschedule Flow ----------
-
 function RescheduleFlow({
   booking, settings, walletBalance, feePct, onClose, onComplete,
 }: {
@@ -461,7 +553,6 @@ function RescheduleFlow({
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
 
-  // Load booked ranges for the chosen console/date
   useEffect(() => {
     ;(async () => {
       setLoading(true)
@@ -545,7 +636,6 @@ function RescheduleFlow({
               {formatDateShort(booking.slot_start)} {formatTimeRange(booking.slot_start, booking.slot_end)}
             </div>
 
-            {/* Date */}
             <div className="mb-3">
               <div className="text-[10px] text-gray-500 tracking-wider mb-2">NEW DATE</div>
               <div className="flex gap-2 overflow-x-auto pb-1">
@@ -569,7 +659,6 @@ function RescheduleFlow({
               </div>
             </div>
 
-            {/* Slots */}
             <div className="mb-3">
               <div className="text-[10px] text-gray-500 tracking-wider mb-2">NEW TIME</div>
               {loading ? (
@@ -590,7 +679,6 @@ function RescheduleFlow({
               )}
             </div>
 
-            {/* Duration */}
             {slotStart && (
               <div className="mb-3">
                 <div className="text-[10px] text-gray-500 tracking-wider mb-2">DURATION</div>
@@ -661,7 +749,7 @@ function RescheduleFlow({
             `Each reschedule deducts ${Math.round(feePct * 100)}% (${formatINR(fee)}).`,
             isConfirmed
               ? `${formatINR(refundFromOld)} refunded now. New ${formatINR(newAmount)} deducted on confirm.`
-              : `New booking amount: ${formatINR(newAmount)}. Deducted when admin confirms.`,
+              : `New booking amount: ${formatINR(newAmount)}. Deducted when Play Zone confirms.`,
           ]}
           confirmLabel="Confirm Reschedule"
           cancelLabel="Go Back"
@@ -673,8 +761,6 @@ function RescheduleFlow({
     </>
   )
 }
-
-// ---- helpers ----
 
 function startOfDayISO(dateStr: string): string {
   const [y, m, d] = dateStr.split('-').map(Number)

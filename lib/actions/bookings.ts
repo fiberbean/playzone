@@ -7,7 +7,7 @@ import { getAllSettings } from './settings';
 import { insertWalletTxn } from './wallet';
 import { createNotification, createSessionReminders } from './notifications';
 import { grantTimeCredit } from './timeCredit';
-import { calcAmount, calcCancellation } from '@/lib/utils/money';
+import { calcAmount, calcCancellation, getPlayerRate } from '@/lib/utils/money';
 import { formatTime, formatDateShort, formatTimeRange } from '@/lib/utils/time';
 
 // ---------- CREATE ----------
@@ -17,6 +17,7 @@ export interface CreateBookingInput {
   slot_start: string; // ISO
   duration_min: number;
   players: number;
+  amount: number; // 👈 Added: UI nunchi total amount pass avuthundi
   notes?: string;
 }
 
@@ -26,12 +27,12 @@ export async function createBooking(input: CreateBookingInput) {
   if (!user) throw new Error('Not authenticated');
 
   const settings = await getAllSettings();
-  const openHour = settings.open_hour as number;
-  const closeHour = settings.close_hour as number;
-  const slotMin = settings.slot_minutes as number;
   const minDur = settings.min_duration_min as number;
   const maxDur = settings.max_duration_min as number;
-  const advanceDays = settings.advance_days as number;
+  const slotMin = settings.slot_minutes as number;
+  
+  // Auto-confirm setting check
+  const autoConfirm = settings.auto_confirm_bookings === true;
 
   // Validate duration
   if (input.duration_min < minDur || input.duration_min > maxDur) {
@@ -65,15 +66,28 @@ export async function createBooking(input: CreateBookingInput) {
     throw new Error(`This console supports up to ${console.joysticks} players`);
   }
 
-  // Compute amount
-  const rate = input.players === 1 ? game.single_player_rate : game.multiplayer_rate;
+  const amount = input.amount; 
   const rateType = input.players === 1 ? 'single' : 'multiplayer';
-  const amount = calcAmount(rate, input.duration_min);
+  const hourly_rate_snapshot = amount / (input.duration_min / 60);
 
   const slotStart = new Date(input.slot_start);
   const slotEnd = new Date(slotStart.getTime() + input.duration_min * 60 * 1000);
 
-  // Insert (exclusion constraint will reject overlaps)
+  // Server-side conflict check
+  const { data: conflicts, error: conflictErr } = await supabase
+    .from('bookings')
+    .select('id')
+    .eq('console_id', input.console_id)
+    .in('status', ['pending', 'confirmed', 'active'])
+    .lt('slot_start', slotEnd.toISOString())
+    .gt('slot_end', slotStart.toISOString());
+
+  if (conflictErr) throw new Error(conflictErr.message);
+  if (conflicts && conflicts.length > 0) {
+    throw new Error('This time slot on the selected console has just been booked. Please pick a different time or console.');
+  }
+
+  // Insert booking
   const { data: booking, error } = await supabase
     .from('bookings')
     .insert({
@@ -84,7 +98,7 @@ export async function createBooking(input: CreateBookingInput) {
       slot_end: slotEnd.toISOString(),
       duration_min: input.duration_min,
       players: input.players,
-      hourly_rate_snapshot: rate,
+      hourly_rate_snapshot: hourly_rate_snapshot,
       rate_type: rateType,
       amount,
       status: 'pending',
@@ -95,18 +109,72 @@ export async function createBooking(input: CreateBookingInput) {
     .single();
 
   if (error) {
-    if (error.code === '23P01') throw new Error('This slot is already booked. Please pick another.');
+    if (error.code === '23P01') {
+      throw new Error('This time slot on the selected console has just been booked. Please pick a different time or console.');
+    }
     throw error;
   }
 
-  await createNotification({
-    user_id: user.id,
-    type: 'booking_confirmed',
-    title: '⏳ Booking placed',
-    body: `${game.name} • ${console.name}\n${formatDateShort(slotStart)} • ${formatTimeRange(slotStart, slotEnd)}\nAwaiting admin confirmation.`,
-    booking_id: booking.id,
-    priority: 'normal',
-  });
+  // ✅ AUTO-CONFIRM LOGIC
+  if (autoConfirm) {
+    try {
+      // Wallet nunchi amount cut cheddam
+      const txn = await insertWalletTxn({
+        user_id: user.id,
+        type: 'debit',
+        amount: amount,
+        source: 'booking_confirm',
+        booking_id: booking.id,
+        created_by: user.id,
+        reason_short: 'Auto Booking Confirmed',
+        reason_long: `${game.name} • ${console.name}`,
+        metadata: {
+          rate: hourly_rate_snapshot,
+          rate_type: rateType,
+          duration_min: input.duration_min,
+          players: input.players,
+        },
+      });
+
+      // Wallet cut ayyaka confirm cheyadam
+      await supabase.from('bookings')
+        .update({ status: 'confirmed', confirmed_at: new Date().toISOString() })
+        .eq('id', booking.id);
+
+      // Notification pampadam
+      await createNotification({
+        user_id: user.id,
+        type: 'booking_confirmed',
+        title: '✅ Booking Auto-Confirmed',
+        body: `₹${amount} debited instantly. See you at ${formatTime(slotStart)}.`,
+        booking_id: booking.id,
+        wallet_txn_id: txn.id,
+        priority: 'high',
+      });
+
+      // Local booking data update
+      booking.status = 'confirmed'; 
+
+    } catch (e) {
+      // Balance saripokapothe error handling
+      await supabase.from('bookings').update({ 
+        status: 'cancelled', 
+        cancel_reason: 'Auto-confirm failed: Insufficient balance' 
+      }).eq('id', booking.id);
+      
+      throw new Error('Insufficient wallet balance for auto-confirmation. Please recharge and try again.');
+    }
+  } else {
+    // Auto-confirm OFF unte purathala la pending notification
+    await createNotification({
+      user_id: user.id,
+      type: 'booking_confirmed',
+      title: '⏳ Booking placed',
+      body: `${game.name} • ${console.name}\n${formatDateShort(slotStart)} • ${formatTimeRange(slotStart, slotEnd)}\nAwaiting admin confirmation.`,
+      booking_id: booking.id,
+      priority: 'normal',
+    });
+  }
 
   revalidatePath('/bookings');
   revalidatePath('/playzonemama/bookings');
@@ -296,9 +364,16 @@ export async function rescheduleBooking(
     throw new Error(`Reschedule not allowed within ${cutoffHours} hours`);
   }
 
-  // Compute new amount
-  const rate = old.hourly_rate_snapshot;
-  const newAmount = calcAmount(rate, newDurationMin);
+  // Compute new amount (using dynamic pricing)
+  const perPlayerRate = getPlayerRate(
+    old.game?.player_rates as any,
+    old.game?.pricing_mode as any,
+    old.players,
+    old.game?.single_player_rate ?? 100
+  );
+  const totalHourlyRate = perPlayerRate * old.players;
+  const newAmount = calcAmount(totalHourlyRate, newDurationMin);
+  
   const fee = Math.round(old.amount * feePct * 100) / 100;
   const refundFromOld = Math.round((old.amount - fee) * 100) / 100;
 
@@ -332,7 +407,20 @@ export async function rescheduleBooking(
     refund_amount: refundFromOld,
   }).eq('id', old.id);
 
-  // 3. Create new booking (pending)
+  // 3. Create new booking (pending) - Server-side conflict check
+  const { data: conflicts, error: conflictErr } = await supabase
+    .from('bookings')
+    .select('id')
+    .eq('console_id', old.console_id)
+    .in('status', ['pending', 'confirmed', 'active'])
+    .lt('slot_start', newEnd.toISOString())
+    .gt('slot_end', newStart.toISOString());
+
+  if (conflictErr) throw new Error(conflictErr.message);
+  if (conflicts && conflicts.length > 0) {
+    throw new Error('New slot already booked. Pick another.');
+  }
+
   const { data: newBooking, error } = await supabase
     .from('bookings')
     .insert({
@@ -343,7 +431,7 @@ export async function rescheduleBooking(
       slot_end: newEnd.toISOString(),
       duration_min: newDurationMin,
       players: old.players,
-      hourly_rate_snapshot: rate,
+      hourly_rate_snapshot: totalHourlyRate, // Snapshot total hourly rate
       rate_type: old.rate_type,
       amount: newAmount,
       status: 'pending',

@@ -35,7 +35,8 @@ const SECTIONS: SectionDef[] = [
   {
     title: 'Policies',
     icon: '📋',
-    keys: ['cancellation_fee_pct', 'reschedule_fee_pct', 'cutoff_hours'],
+    // 👇 auto_confirm_bookings add chesanu
+    keys: ['auto_confirm_bookings', 'cancellation_fee_pct', 'reschedule_fee_pct', 'cutoff_hours'],
   },
   {
     title: 'Reminders',
@@ -62,7 +63,7 @@ const SECTIONS: SectionDef[] = [
 const LABELS: Record<string, string> = {
   zone_name: 'Zone Name',
   zone_upi_id: 'UPI ID',
-  zone_payee_name: 'Payee Name',         // ✅ NEW
+  zone_payee_name: 'Payee Name',
   zone_phone: 'Contact Phone',
   open_hour: 'Open Hour (24h)',
   close_hour: 'Close Hour (24h)',
@@ -70,6 +71,7 @@ const LABELS: Record<string, string> = {
   min_duration_min: 'Min Duration (min)',
   max_duration_min: 'Max Duration (min)',
   advance_days: 'Advance Booking (days)',
+  auto_confirm_bookings: 'Auto-Confirm Bookings', // 👈 Kotha label
   cancellation_fee_pct: 'Cancellation Fee %',
   reschedule_fee_pct: 'Reschedule Fee %',
   cutoff_hours: 'Cutoff (hours before start)',

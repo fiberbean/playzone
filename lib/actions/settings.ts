@@ -1,51 +1,96 @@
 // lib/actions/settings.ts
-'use server';
+'use server'
 
-import { createClient } from '@/lib/supabase/server';
-import { revalidatePath } from 'next/cache';
-import { POLICY_DEFAULTS } from '@/lib/constants/policies';
+import { createClient } from '@/lib/supabase/server'
 
-export async function getSetting<T = unknown>(key: string): Promise<T> {
-  const supabase = await createClient();
+const NUMERIC_KEYS = new Set([
+  'open_hour',
+  'close_hour',
+  'slot_minutes',
+  'min_duration_min',
+  'max_duration_min',
+  'advance_days',
+  'cutoff_hours',
+  'cancellation_fee_pct',
+  'reschedule_fee_pct',
+  'scan_code_length',
+  'scan_code_expiry_sec',
+  'scan_code_max_attempts',
+  'scan_early_minutes',
+  'scan_late_minutes',
+  'scan_no_show_minutes',
+  'scan_overrun_grace_min',
+  'scan_overrun_round_min',
+  'time_credit_expiry_days',
+  'time_credit_min_use_min',
+])
+
+const BOOLEAN_KEYS = new Set([
+  'scan_enabled',
+  'scan_require_code',
+  'scan_override_enabled',
+])
+
+/**
+ * Fetch all settings from DB as a flat key → value map.
+ * Numeric keys are coerced to numbers, booleans to booleans.
+ * Array values (e.g. reminder_minutes) are passed through.
+ */
+export async function getAllSettings(): Promise<Record<string, any>> {
+  const supabase = await createClient()
+  const { data, error } = await supabase
+    .from('settings')
+    .select('key, value')
+
+  if (error) {
+    console.error('[getAllSettings] error:', error)
+    return {}
+  }
+
+  const result: Record<string, any> = {}
+  for (const row of data ?? []) {
+    let v = (row as any).value
+
+    // Coerce numeric
+    if (NUMERIC_KEYS.has(row.key) && v !== null && v !== undefined) {
+      const n = Number(v)
+      if (!Number.isNaN(n)) v = n
+    }
+
+    // Coerce boolean
+    if (BOOLEAN_KEYS.has(row.key) && v !== null && v !== undefined) {
+      if (typeof v === 'string') v = v === 'true' || v === '1'
+      else v = Boolean(v)
+    }
+
+    result[row.key] = v
+  }
+
+  return result
+}
+
+/**
+ * Fetch a single setting by key.
+ */
+export async function getSetting(key: string): Promise<any> {
+  const supabase = await createClient()
   const { data } = await supabase
     .from('settings')
     .select('value')
     .eq('key', key)
-    .single();
+    .maybeSingle()
 
-  if (!data) return POLICY_DEFAULTS[key as keyof typeof POLICY_DEFAULTS] as T;
-  return data.value as T;
+  return data?.value ?? null
 }
 
-export async function updateSetting(key: string, value: unknown) {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) throw new Error('Not authenticated');
-
-  const { data: profile } = await supabase
-    .from('profiles').select('role').eq('id', user.id).single();
-  if (profile?.role !== 'admin') throw new Error('Not admin');
-
+/**
+ * Update a setting value (admin only — RLS handles auth).
+ */
+export async function updateSetting(key: string, value: any): Promise<void> {
+  const supabase = await createClient()
   const { error } = await supabase
     .from('settings')
-    .update({ value, updated_at: new Date().toISOString() })
-    .eq('key', key);
+    .upsert({ key, value, updated_at: new Date().toISOString() })
 
-  if (error) throw error;
-  revalidatePath('/playzonemama/settings');
-}
-
-export async function getAllSettings() {
-  const supabase = await createClient();
-  const { data } = await supabase.from('settings').select('key, value');
-
-  // ✅ Start with POLICY_DEFAULTS (fallback)
-  const map = { ...POLICY_DEFAULTS } as Record<string, unknown>
-
-  // ✅ Copy ALL keys from DB (not just POLICY_DEFAULTS ones)
-  for (const row of data ?? []) {
-    map[row.key] = row.value
-  }
-
-  return map
+  if (error) throw new Error(error.message)
 }

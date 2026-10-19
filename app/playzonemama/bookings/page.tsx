@@ -55,17 +55,26 @@ export default function AdminBookingsPage() {
 
   const fetchData = async () => {
     const supabase = createClient()
-    const { data } = await supabase
+    // FIX: Added FK relation for profiles
+    const { data, error } = await supabase
       .from('bookings')
       .select(`
         id, user_id, game_id, console_id, slot_start, slot_end,
         duration_min, players, amount, status, rate_type, created_at,
         game:games(name),
         console:consoles(name, type),
-        profile:profiles(full_name, email)
+        profile:profiles!bookings_user_id_fkey(full_name, email)
       `)
       .order('slot_start', { ascending: false })
       .limit(200)
+    
+    if (error) {
+      console.error('Fetch error:', error)
+      toast.error('Failed to load bookings', error.message)
+      setLoading(false)
+      return
+    }
+
     setRows((data as any) ?? [])
     setLoading(false)
   }
