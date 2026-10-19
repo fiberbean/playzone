@@ -35,6 +35,7 @@ export default function ScanPage() {
   const [manualId, setManualId] = useState('')
   const [code, setCode] = useState('')
   const [busy, setBusy] = useState(false)
+  const [cameraError, setCameraError] = useState<string | null>(null)
   const [lastScan, setLastScan] = useState<{
     name: string
     action: string
@@ -46,7 +47,6 @@ export default function ScanPage() {
   // Init QR scanner
   useEffect(() => {
     if (stage.kind !== 'idle') {
-      // stop scanner when not idle
       if (scannerRef.current) {
         scannerRef.current.stop().catch(() => {})
         scannerRef.current.clear().catch(() => {})
@@ -54,23 +54,48 @@ export default function ScanPage() {
       }
       return
     }
+
     let mounted = true
-    ;(async () => {
+
+    // Check permissions first
+    navigator.mediaDevices.getUserMedia({ video: true })
+      .then(() => {
+        if (!mounted) return
+        setCameraError(null)
+        initScanner()
+      })
+      .catch((err) => {
+        if (!mounted) return
+        console.error('Camera permission error:', err)
+        setCameraError('Camera access denied. Please allow camera permissions in your browser settings.')
+      })
+
+    const initScanner = async () => {
       try {
         const { Html5Qrcode } = await import('html5-qrcode')
         if (!mounted) return
+
+        // Clear div before initializing
+        const readerDiv = document.getElementById('qr-reader')
+        if (readerDiv) readerDiv.innerHTML = ''
+
         const scanner = new Html5Qrcode('qr-reader')
         scannerRef.current = scanner
+
         await scanner.start(
           { facingMode: 'environment' },
           { fps: 10, qrbox: { width: 250, height: 250 } },
           (decodedText) => handleQR(decodedText),
-          () => {}
+          () => {} // ignore errors while scanning
         )
-      } catch (e) {
+      } catch (e: any) {
         console.error('Scanner init failed', e)
+        if (mounted) {
+          setCameraError(`Camera initialization failed: ${e?.message || 'Unknown error'}`)
+        }
       }
-    })()
+    }
+
     return () => {
       mounted = false
       if (scannerRef.current) {
@@ -85,7 +110,6 @@ export default function ScanPage() {
     if (busy) return
     setBusy(true)
     try {
-      // Stop scanner quickly to avoid double scans
       if (scannerRef.current) {
         scannerRef.current.stop().catch(() => {})
         scannerRef.current.clear().catch(() => {})
@@ -100,7 +124,6 @@ export default function ScanPage() {
         requireCode: res.requireCode,
       })
       if (!res.requireCode) {
-        // immediate success
         setStage({
           kind: 'success',
           booking: res.booking as ScannedBooking,
@@ -177,6 +200,7 @@ export default function ScanPage() {
     setStage({ kind: 'idle' })
     setCode('')
     setManualId('')
+    setCameraError(null)
   }
 
   return (
@@ -194,10 +218,23 @@ export default function ScanPage() {
       {stage.kind === 'idle' && (
         <div className="space-y-4">
           <div className="bg-gradient-to-br from-[#12121a] to-[#0a0a0f] border border-cyan-500/30 rounded-2xl p-4">
-            <div
-              id="qr-reader"
-              className="w-full aspect-square max-w-md mx-auto rounded-xl overflow-hidden"
-            />
+            
+            {/* Camera Reader - Explicit Height Added */}
+            <div className="relative w-full max-w-md mx-auto aspect-square rounded-xl overflow-hidden bg-black/50">
+              <div
+                id="qr-reader"
+                className="absolute inset-0 w-full h-full"
+              />
+              
+              {cameraError && (
+                <div className="absolute inset-0 flex items-center justify-center p-4 text-center bg-black/80">
+                  <div className="text-red-400 text-sm font-bold">
+                    ⚠️ {cameraError}
+                  </div>
+                </div>
+              )}
+            </div>
+
             <p className="text-center text-xs text-gray-500 mt-3 tracking-wider">
               Point at customer's QR code
             </p>
@@ -270,7 +307,6 @@ export default function ScanPage() {
                         arr[i] = v
                         const next = arr.join('').slice(0, 4)
                         setCode(next)
-                        // Auto focus next
                         if (v && i < 3) {
                           const nextEl = document.querySelectorAll<HTMLInputElement>('[data-code-input]')[i + 1]
                           nextEl?.focus()
