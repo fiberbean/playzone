@@ -2,10 +2,10 @@
 'use client'
 
 import { formatTime } from '@/lib/utils/time'
-import type { Slot } from '@/lib/utils/slots'
+import type { SlotDef } from '@/lib/utils/slots' // 👈 Type name fixed
 
 interface Props {
-  slots: Slot[]
+  slots: SlotDef[]
   selectedStart: Date | null
   selectedEnd?: Date | null
   onSelect: (start: Date) => void
@@ -35,22 +35,15 @@ export function SlotGrid({ slots, selectedStart, selectedEnd, onSelect }: Props)
         const isEnd = endMs !== null && slotTime === endMs
         const isInRange = startMs !== null && endMs !== null && slotTime > startMs && slotTime < endMs
 
-        // Determine if this slot is the last one in a row to handle borders properly
-        // Note: using CSS calc for responsive widths
         let cls = 'relative flex-shrink-0 flex flex-col items-center justify-center h-16 sm:h-20 w-[calc(25%)] sm:w-[calc(16.666%)] md:w-[calc(12.5%)] transition-all '
-        
-        // Train Effect: No gaps for Start, Middle, End. Standard gap for normal slots.
-        // Using -ml-[1px] to overlap borders for a continuous line.
         
         if (isStart) {
           cls += 'bg-gradient-to-r from-cyan-600/40 to-cyan-500/10 border-y-2 border-l-2 border-cyan-400 rounded-l-lg z-20 pl-1 '
         } else if (isEnd) {
           cls += 'bg-gradient-to-r from-pink-500/10 to-pink-600/40 border-y-2 border-r-2 border-pink-400 rounded-r-lg z-20 pr-1 '
         } else if (isInRange) {
-          // The continuous middle part
           cls += 'bg-purple-500/20 border-y-2 border-purple-500/30 border-x-0 z-10 '
         } else {
-          // Free or unavailable slots keep their spacing
           cls += 'px-1 '
         }
 
@@ -72,7 +65,6 @@ export function SlotGrid({ slots, selectedStart, selectedEnd, onSelect }: Props)
                 'bg-[#12121a] border border-white/10 text-gray-200 hover:border-cyan-500/40'
               }`}
             >
-              {/* IN / OUT Badges */}
               {isStart && (
                 <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-cyan-500 text-black text-[9px] font-black px-1.5 py-0.5 rounded-full shadow-md z-20">
                   IN

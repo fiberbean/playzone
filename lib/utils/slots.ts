@@ -115,22 +115,17 @@ export function validDurations(
 ): number[] {
   const result: number[] = [];
 
-  // ─── Defensive coercion ──────────────────────────────────────────
   const closeHourN = Number(closeHour);
   const slotMinutesN = Number(slotMinutes);
   const minDurN = Number(minDur);
   const maxDurN = Number(maxDur);
 
-  // Sanity check — if any are NaN, return empty
   if (
     Number.isNaN(closeHourN) ||
     Number.isNaN(slotMinutesN) ||
     Number.isNaN(minDurN) ||
     Number.isNaN(maxDurN)
   ) {
-    console.warn('[validDurations] NaN detected in arguments', {
-      closeHour, slotMinutes, minDur, maxDur,
-    });
     return [];
   }
 
@@ -139,30 +134,10 @@ export function validDurations(
   const closeMin = closeHourN * 60;
   const availableMin = closeMin - startMin;
 
-  // ─── Debug log (remove after bug is fixed) ───────────────────────
-  console.log('[validDurations] input', {
-    startISO: start.toISOString(),
-    parts,
-    startMin,
-    closeHour: closeHourN,
-    closeMin,
-    availableMin,
-    minDur: minDurN,
-    maxDur: maxDurN,
-    slotMinutes: slotMinutesN,
-    bookedRanges: bookedRanges.map((r) => ({
-      start: r.start,
-      end: r.end,
-      status: r.status,
-    })),
-  })
-  // ────────────────────────────────────────────────────────────────
-
   for (let d = minDurN; d <= Math.min(maxDurN, availableMin); d += slotMinutesN) {
     const canBook = canBookFrom(start, d, bookedRanges);
     if (canBook) result.push(d);
   }
 
-  console.log('[validDurations] result =', result)
   return result;
 }
