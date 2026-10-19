@@ -56,58 +56,44 @@ export default function ScanPage() {
     }
 
     let mounted = true
+    let scanner: any = null;
 
-    const initScanner = async () => {
+    // Delay konchem, HTML render avvadaniki
+    const timer = setTimeout(async () => {
       try {
         const { Html5Qrcode } = await import('html5-qrcode')
         if (!mounted) return
 
-        // Clear div before initializing
         const readerDiv = document.getElementById('qr-reader')
-        if (readerDiv) readerDiv.innerHTML = ''
+        if (!readerDiv) return;
+        
+        // Clear div before init
+        readerDiv.innerHTML = ''
 
-        const scanner = new Html5Qrcode('qr-reader')
+        scanner = new Html5Qrcode('qr-reader')
         scannerRef.current = scanner
 
-        // Manam explicit ga devices list theesukuni, back camera ni select chesthunnamu
-        const devices = await Html5Qrcode.getCameras()
-        if (devices && devices.length > 0) {
-          // Back camera (environment) vethukuntunnamu. Leda first camera ni theesukuntunnamu
-          const backCamera = devices.find(d => d.label.toLowerCase().includes('back') || d.label.toLowerCase().includes('environment'))
-          const cameraId = backCamera ? backCamera.id : devices[0].id
+        await scanner.start(
+          { facingMode: 'environment' },
+          { fps: 10, qrbox: { width: 250, height: 250 } },
+          (decodedText: string) => handleQR(decodedText),
+          () => {} 
+        )
+        
+        // Success ayithe error clear chey
+        if (mounted) setCameraError(null)
 
-          await scanner.start(
-            cameraId, // 👈 Direct ga camera ID ivvadam valla 'Unknown error' raadhu
-            { fps: 10, qrbox: { width: 250, height: 250 } },
-            (decodedText) => handleQR(decodedText),
-            () => {}
-          )
-          setCameraError(null)
-        } else {
-          setCameraError('No cameras found on this device.')
-        }
       } catch (e: any) {
         console.error('Scanner init failed', e)
         if (mounted) {
-          setCameraError(`Camera failed: ${e?.message || 'Check permissions'}`)
+          setCameraError('Camera access failed. Please click "Reset permissions" in browser and try again.')
         }
       }
-    }
-
-    // Permissions check + init
-    navigator.mediaDevices.getUserMedia({ video: true })
-      .then(() => {
-        if (mounted) initScanner()
-      })
-      .catch((err) => {
-        if (mounted) {
-          console.error('Camera permission error:', err)
-          setCameraError('Camera access denied. Please allow permissions in browser settings.')
-        }
-      })
+    }, 200) // 200ms delay
 
     return () => {
       mounted = false
+      clearTimeout(timer)
       if (scannerRef.current) {
         scannerRef.current.stop().catch(() => {})
         scannerRef.current.clear().catch(() => {})
@@ -236,10 +222,16 @@ export default function ScanPage() {
               />
               
               {cameraError && (
-                <div className="absolute inset-0 flex items-center justify-center p-4 text-center bg-black/80">
-                  <div className="text-red-400 text-sm font-bold">
+                <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center bg-black/80">
+                  <div className="text-red-400 text-sm font-bold mb-2">
                     ⚠️ {cameraError}
                   </div>
+                  <button 
+                    onClick={() => window.location.reload()}
+                    className="mt-2 text-xs bg-cyan-600 hover:bg-cyan-500 text-white px-3 py-1.5 rounded-lg"
+                  >
+                    Reload Page
+                  </button>
                 </div>
               )}
             </div>
@@ -285,6 +277,8 @@ export default function ScanPage() {
         </div>
       )}
 
+      {/* ... (MEE PURATHANA SCANNED, SUCCESS, ERROR UI CODE ALANE UNDANDI) ... */}
+      
       {/* SCANNED — need code */}
       {stage.kind === 'scanned' && (
         <div className="bg-gradient-to-br from-[#12121a] to-[#0a0a0f] border border-cyan-500/40 rounded-2xl p-5 space-y-5">
