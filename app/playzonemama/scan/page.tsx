@@ -1,7 +1,7 @@
 // app/playzonemama/scan/page.tsx
 'use client'
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { scanQR, verifyScanCode, overrideScan } from '@/lib/actions/scan'
 import { toast, playChime } from '@/components/ui/Toast'
 import { formatTime, formatDateShort } from '@/lib/utils/time'
@@ -35,15 +35,97 @@ export default function ScanPage() {
   const [manualId, setManualId] = useState('')
   const [code, setCode] = useState('')
   const [busy, setBusy] = useState(false)
+  const [cameraError, setCameraError] = useState<string | null>(null)
   const [lastScan, setLastScan] = useState<{
     name: string
     action: string
     time: string
   } | null>(null)
   
+  const scannerRef = useRef<any>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { settings } = useSettings()
 
+  // Init QR Scanner
+  useEffect(() => {
+    if (stage.kind !== 'idle') {
+      if (scannerRef.current) {
+        try { 
+          scannerRef.current.stop().then(() => scannerRef.current.clear()) 
+        } catch (e) {}
+        scannerRef.current = null
+      }
+      return
+    }
+
+    let mounted = true
+    let scanner: any = null
+
+    const initScanner = async () => {
+      // 1. Element check (React Strict mode valla double render avvakunda)
+      const el = document.getElementById('qr-reader')
+      if (!el || el.innerHTML !== '') return;
+
+      // 2. Wait a bit for DOM to fully render
+      setTimeout(async () => {
+        if (!mounted) return
+
+        const el = document.getElementById('qr-reader')
+        if (!el) return
+
+        try {
+          const { Html5Qrcode } = await import('html5-qrcode')
+          
+          if (!mounted) return
+
+          // Clear element before init
+          el.innerHTML = ''
+
+          scanner = new Html5Qrcode('qr-reader')
+          scannerRef.current = scanner
+
+          await scanner.start(
+            { facingMode: 'environment' },
+            { fps: 10, qrbox: { width: 250, height: 250 } },
+            (decodedText: string) => {
+              // Stop scanner immediately on scan
+              scanner.stop().then(() => {
+                scanner.clear()
+              }).catch(() => {})
+              handleQR(decodedText)
+            },
+            () => {} // Ignore frequent scan errors
+          )
+          
+          setCameraError(null)
+        } catch (err: any) {
+          console.error('Scanner init error:', err)
+          if (mounted) {
+            setCameraError('Camera access failed. Please allow camera permissions.')
+          }
+        }
+      }, 300)
+    }
+
+    initScanner()
+
+    return () => {
+      mounted = false
+      if (scanner) {
+        try { 
+          scanner.stop().then(() => {
+            scanner.clear()
+          }).catch(() => {}) 
+        } catch (e) {}
+      }
+      if (scannerRef.current) {
+        try { scannerRef.current.clear() } catch (e) {}
+        scannerRef.current = null
+      }
+    }
+  }, [stage.kind])
+
+  // Native Camera Fallback
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -51,8 +133,6 @@ export default function ScanPage() {
     setBusy(true)
     try {
       const { Html5Qrcode } = await import('html5-qrcode')
-      
-      // Create a temporary hidden div just for file scanning
       let tempDiv = document.getElementById('file-scan-temp')
       if (!tempDiv) {
         tempDiv = document.createElement('div')
@@ -60,18 +140,12 @@ export default function ScanPage() {
         tempDiv.style.display = 'none'
         document.body.appendChild(tempDiv)
       }
-
       const html5QrCode = new Html5Qrcode("file-scan-temp")
       const decodedText = await html5QrCode.scanFile(file, true)
-      
-      // Clean up
       html5QrCode.clear()
-      
       await handleQR(decodedText)
-
     } catch (err: any) {
-      toast.error('Scan failed', 'Could not detect a valid QR code in this image. Please try again.')
-      console.error(err)
+      toast.error('Scan failed', 'Could not detect a valid QR code in this image.')
     } finally {
       setBusy(false)
       if (fileInputRef.current) fileInputRef.current.value = ''
@@ -80,7 +154,12 @@ export default function ScanPage() {
 
   const handleQR = async (qrText: string) => {
     if (busy && stage.kind !== 'idle') return
+    setBusy(true)
     try {
+      if (scannerRef.current) {
+        try { scannerRef.current.clear() } catch (e) {}
+        scannerRef.current = null
+      }
       const res = await scanQR(qrText)
       playChime(false)
       setStage({
@@ -104,6 +183,8 @@ export default function ScanPage() {
     } catch (e) {
       playChime(true)
       setStage({ kind: 'error', message: e instanceof Error ? e.message : 'Scan failed' })
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -164,10 +245,14 @@ export default function ScanPage() {
     setStage({ kind: 'idle' })
     setCode('')
     setManualId('')
+    setCameraError(null)
   }
 
   return (
     <div>
+      {/* Hidden div for file scanning */}
+      <div id="file-scan-temp" className="hidden"></div>
+
       <div className="mb-6">
         <h2 className="text-2xl sm:text-3xl font-black tracking-wider bg-gradient-to-r from-cyan-400 to-pink-500 bg-clip-text text-transparent">
           SCAN ID
@@ -177,34 +262,47 @@ export default function ScanPage() {
         </p>
       </div>
 
-      {/* IDLE — Native Camera View */}
+      {/* IDLE — camera view */}
       {stage.kind === 'idle' && (
         <div className="space-y-4">
-          <div className="bg-gradient-to-br from-[#12121a] to-[#0a0a0f] border border-cyan-500/30 rounded-2xl p-8 flex flex-col items-center justify-center min-h-[300px]">
+          <div className="bg-gradient-to-br from-[#12121a] to-[#0a0a0f] border border-cyan-500/30 rounded-2xl p-4">
             
-            <div className="text-6xl mb-4 opacity-80">📷</div>
-            <h3 className="text-white font-bold mb-1">Scan Customer QR</h3>
-            <p className="text-xs text-gray-400 text-center mb-6 max-w-xs">
-              Tap the button below to open your phone's camera and take a photo of the customer's check-in QR code.
-            </p>
+            {/* Scanner Container */}
+            <div className="relative w-full max-w-md mx-auto min-h-[300px] bg-black/50 rounded-xl overflow-hidden mb-4">
+              <div 
+                id="qr-reader" 
+                className="w-full h-full [&>div]:!border-none [&_button]:!bg-gradient-to-r [&_button]:!from-cyan-500 [&_button]:!to-pink-500 [&_button]:!text-white [&_button]:!rounded-lg [&_button]:!font-bold [&_button]:!px-4 [&_button]:!py-2 [&_button]:!my-2 [&_select]:!bg-[#12121a] [&_select]:!text-white [&_select]:!p-2 [&_select]:!rounded-lg"
+              />
+              
+              {cameraError && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center bg-black/90 z-10">
+                  <div className="text-amber-400 text-4xl mb-2">⚠️</div>
+                  <div className="text-red-400 text-sm font-bold mb-2">
+                    {cameraError}
+                  </div>
+                </div>
+              )}
+            </div>
 
-            <input
-              type="file"
-              accept="image/*"
-              capture="environment"
-              className="hidden"
-              ref={fileInputRef}
-              onChange={handleFileUpload}
-            />
-            
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={busy}
-              className="px-8 py-3 bg-gradient-to-r from-cyan-500 to-pink-500 text-white font-bold rounded-xl shadow-lg shadow-cyan-500/20 active:scale-95 transition disabled:opacity-50"
-            >
-              {busy ? 'Processing...' : 'Open Camera'}
-            </button>
+            {/* Fallback Native Camera Button */}
+            <div className="text-center mt-2">
+              <span className="text-xs text-gray-400 block mb-2">Camera not working?</span>
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                ref={fileInputRef}
+                onChange={handleFileUpload}
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 border border-cyan-500/30 text-cyan-300 text-xs font-bold rounded-lg transition"
+              >
+                📸 Take Photo of QR
+              </button>
+            </div>
           </div>
 
           <div className="bg-gradient-to-br from-[#12121a] to-[#0a0a0f] border border-cyan-500/20 rounded-2xl p-4">
@@ -243,6 +341,8 @@ export default function ScanPage() {
         </div>
       )}
 
+      {/* ... (Mee purathana SCANNED, SUCCESS, ERROR UI code alane undandi) ... */}
+      
       {/* SCANNED — need code */}
       {stage.kind === 'scanned' && (
         <div className="bg-gradient-to-br from-[#12121a] to-[#0a0a0f] border border-cyan-500/40 rounded-2xl p-5 space-y-5">
