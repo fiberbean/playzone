@@ -57,19 +57,6 @@ export default function ScanPage() {
 
     let mounted = true
 
-    // Check permissions first
-    navigator.mediaDevices.getUserMedia({ video: true })
-      .then(() => {
-        if (!mounted) return
-        setCameraError(null)
-        initScanner()
-      })
-      .catch((err) => {
-        if (!mounted) return
-        console.error('Camera permission error:', err)
-        setCameraError('Camera access denied. Please allow camera permissions in your browser settings.')
-      })
-
     const initScanner = async () => {
       try {
         const { Html5Qrcode } = await import('html5-qrcode')
@@ -82,19 +69,42 @@ export default function ScanPage() {
         const scanner = new Html5Qrcode('qr-reader')
         scannerRef.current = scanner
 
-        await scanner.start(
-          { facingMode: 'environment' },
-          { fps: 10, qrbox: { width: 250, height: 250 } },
-          (decodedText) => handleQR(decodedText),
-          () => {} // ignore errors while scanning
-        )
+        // Manam explicit ga devices list theesukuni, back camera ni select chesthunnamu
+        const devices = await Html5Qrcode.getCameras()
+        if (devices && devices.length > 0) {
+          // Back camera (environment) vethukuntunnamu. Leda first camera ni theesukuntunnamu
+          const backCamera = devices.find(d => d.label.toLowerCase().includes('back') || d.label.toLowerCase().includes('environment'))
+          const cameraId = backCamera ? backCamera.id : devices[0].id
+
+          await scanner.start(
+            cameraId, // 👈 Direct ga camera ID ivvadam valla 'Unknown error' raadhu
+            { fps: 10, qrbox: { width: 250, height: 250 } },
+            (decodedText) => handleQR(decodedText),
+            () => {}
+          )
+          setCameraError(null)
+        } else {
+          setCameraError('No cameras found on this device.')
+        }
       } catch (e: any) {
         console.error('Scanner init failed', e)
         if (mounted) {
-          setCameraError(`Camera initialization failed: ${e?.message || 'Unknown error'}`)
+          setCameraError(`Camera failed: ${e?.message || 'Check permissions'}`)
         }
       }
     }
+
+    // Permissions check + init
+    navigator.mediaDevices.getUserMedia({ video: true })
+      .then(() => {
+        if (mounted) initScanner()
+      })
+      .catch((err) => {
+        if (mounted) {
+          console.error('Camera permission error:', err)
+          setCameraError('Camera access denied. Please allow permissions in browser settings.')
+        }
+      })
 
     return () => {
       mounted = false
@@ -219,7 +229,6 @@ export default function ScanPage() {
         <div className="space-y-4">
           <div className="bg-gradient-to-br from-[#12121a] to-[#0a0a0f] border border-cyan-500/30 rounded-2xl p-4">
             
-            {/* Camera Reader - Explicit Height Added */}
             <div className="relative w-full max-w-md mx-auto aspect-square rounded-xl overflow-hidden bg-black/50">
               <div
                 id="qr-reader"
