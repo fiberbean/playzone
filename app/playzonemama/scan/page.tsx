@@ -35,80 +35,101 @@ export default function ScanPage() {
   const [manualId, setManualId] = useState('')
   const [code, setCode] = useState('')
   const [busy, setBusy] = useState(false)
-  const [cameraError, setCameraError] = useState<string | null>(null)
+  const [scannerError, setScannerError] = useState<string | null>(null)
   const [lastScan, setLastScan] = useState<{
     name: string
     action: string
     time: string
   } | null>(null)
   const scannerRef = useRef<any>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const { settings } = useSettings()
 
   // Init QR scanner
   useEffect(() => {
     if (stage.kind !== 'idle') {
       if (scannerRef.current) {
-        scannerRef.current.stop().catch(() => {})
-        scannerRef.current.clear().catch(() => {})
+        try { scannerRef.current.clear() } catch (e) {}
         scannerRef.current = null
       }
       return
     }
 
     let mounted = true
-    let scanner: any = null;
 
-    // Delay konchem, HTML render avvadaniki
-    const timer = setTimeout(async () => {
+    const initScanner = async () => {
       try {
-        const { Html5Qrcode } = await import('html5-qrcode')
+        const { Html5QrcodeScanner } = await import('html5-qrcode')
         if (!mounted) return
 
-        const readerDiv = document.getElementById('qr-reader')
-        if (!readerDiv) return;
-        
-        // Clear div before init
-        readerDiv.innerHTML = ''
+        const scanner = new Html5QrcodeScanner(
+          'qr-reader',
+          { 
+            fps: 10, 
+            qrbox: { width: 250, height: 250 },
+            rememberLastUsedCamera: true,
+            supportedScanTypes: [0] 
+          },
+          false 
+        )
 
-        scanner = new Html5Qrcode('qr-reader')
         scannerRef.current = scanner
 
-        await scanner.start(
-          { facingMode: 'environment' },
-          { fps: 10, qrbox: { width: 250, height: 250 } },
-          (decodedText: string) => handleQR(decodedText),
-          () => {} 
+        scanner.render(
+          (decodedText: string) => {
+            scanner.clear()
+            handleQR(decodedText)
+          },
+          (error: any) => {
+            // Ignore frequent scan errors
+            if (error && error.name === 'NotAllowedError') {
+               setScannerError('Camera permission denied. Please allow in settings.')
+            }
+          }
         )
-        
-        // Success ayithe error clear chey
-        if (mounted) setCameraError(null)
-
       } catch (e: any) {
         console.error('Scanner init failed', e)
         if (mounted) {
-          setCameraError('Camera access failed. Please click "Reset permissions" in browser and try again.')
+          setScannerError(`Failed to start camera: ${e?.message || 'Unknown error'}`)
         }
       }
-    }, 200) // 200ms delay
+    }
+
+    setTimeout(initScanner, 300)
 
     return () => {
       mounted = false
-      clearTimeout(timer)
       if (scannerRef.current) {
-        scannerRef.current.stop().catch(() => {})
-        scannerRef.current.clear().catch(() => {})
+        try { scannerRef.current.clear() } catch (e) {}
         scannerRef.current = null
       }
     }
   }, [stage.kind])
+
+  // File Upload Scan
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    try {
+      const { Html5Qrcode } = await import('html5-qrcode')
+      const html5QrCode = new Html5Qrcode("qr-reader")
+      const decodedText = await html5QrCode.scanFile(file, true)
+      handleQR(decodedText)
+    } catch (err: any) {
+      toast.error('Scan failed', 'Could not detect QR code in image')
+      console.error(err)
+    }
+    // Reset input
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
 
   const handleQR = async (qrText: string) => {
     if (busy) return
     setBusy(true)
     try {
       if (scannerRef.current) {
-        scannerRef.current.stop().catch(() => {})
-        scannerRef.current.clear().catch(() => {})
+        try { scannerRef.current.clear() } catch (e) {}
         scannerRef.current = null
       }
       const res = await scanQR(qrText)
@@ -196,7 +217,7 @@ export default function ScanPage() {
     setStage({ kind: 'idle' })
     setCode('')
     setManualId('')
-    setCameraError(null)
+    setScannerError(null)
   }
 
   return (
@@ -215,25 +236,47 @@ export default function ScanPage() {
         <div className="space-y-4">
           <div className="bg-gradient-to-br from-[#12121a] to-[#0a0a0f] border border-cyan-500/30 rounded-2xl p-4">
             
-            <div className="relative w-full max-w-md mx-auto aspect-square rounded-xl overflow-hidden bg-black/50">
-              <div
-                id="qr-reader"
-                className="absolute inset-0 w-full h-full"
+            {/* Camera Scanner Div */}
+            <div className="relative w-full max-w-md mx-auto min-h-[300px] bg-black/50 rounded-xl overflow-hidden mb-4">
+              <div 
+                id="qr-reader" 
+                className="w-full h-full [&>div]:!border-none [&_button]:!bg-gradient-to-r [&_button]:!from-cyan-500 [&_button]:!to-pink-500 [&_button]:!text-white [&_button]:!rounded-lg [&_button]:!font-bold [&_button]:!px-4 [&_button]:!py-2 [&_button]:!my-2 [&_select]:!bg-[#12121a] [&_select]:!text-white [&_select]:!p-2 [&_select]:!rounded-lg"
               />
               
-              {cameraError && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center bg-black/80">
+              {scannerError && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center bg-black/90 z-10">
+                  <div className="text-amber-400 text-4xl mb-2">⚠️</div>
                   <div className="text-red-400 text-sm font-bold mb-2">
-                    ⚠️ {cameraError}
+                    {scannerError}
                   </div>
                   <button 
                     onClick={() => window.location.reload()}
                     className="mt-2 text-xs bg-cyan-600 hover:bg-cyan-500 text-white px-3 py-1.5 rounded-lg"
                   >
-                    Reload Page
+                    Reload
                   </button>
                 </div>
               )}
+            </div>
+
+            {/* Fallback Native Camera Button */}
+            <div className="text-center mt-2">
+              <span className="text-xs text-gray-400 block mb-2">Camera not working?</span>
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                ref={fileInputRef}
+                onChange={handleFileUpload}
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 border border-cyan-500/30 text-cyan-300 text-xs font-bold rounded-lg transition"
+              >
+                📸 Take Photo of QR
+              </button>
             </div>
 
             <p className="text-center text-xs text-gray-500 mt-3 tracking-wider">
@@ -277,8 +320,6 @@ export default function ScanPage() {
         </div>
       )}
 
-      {/* ... (MEE PURATHANA SCANNED, SUCCESS, ERROR UI CODE ALANE UNDANDI) ... */}
-      
       {/* SCANNED — need code */}
       {stage.kind === 'scanned' && (
         <div className="bg-gradient-to-br from-[#12121a] to-[#0a0a0f] border border-cyan-500/40 rounded-2xl p-5 space-y-5">
