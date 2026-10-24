@@ -34,6 +34,7 @@ export function NotificationsClient({
 }) {
   const [items, setItems] = useState<Notification[]>(initial)
   const [filter, setFilter] = useState<Filter>('all')
+  const [busy, setBusy] = useState<string | null>(null)
 
   // Realtime
   useEffect(() => {
@@ -64,23 +65,29 @@ export function NotificationsClient({
   const unreadCount = items.filter((n) => !n.is_read).length
 
   const handleRead = async (id: string) => {
+    setBusy(id)
     try {
       await markNotificationRead(id)
       setItems((prev) =>
         prev.map((n) => (n.id === id ? { ...n, is_read: true, read_at: new Date().toISOString() } : n))
       )
     } catch (e) {
-      toast.error('Failed to mark read')
+      toast.error('Failed to mark read', e instanceof Error ? e.message : '')
+    } finally {
+      setBusy(null)
     }
   }
 
   const handleMarkAll = async () => {
+    setBusy('all')
     try {
       await markAllRead()
       setItems((prev) => prev.map((n) => ({ ...n, is_read: true })))
       toast.success('All marked as read')
     } catch (e) {
-      toast.error('Failed')
+      toast.error('Failed', e instanceof Error ? e.message : '')
+    } finally {
+      setBusy(null)
     }
   }
 
@@ -95,6 +102,7 @@ export function NotificationsClient({
           {unreadCount > 0 && (
             <button
               onClick={handleMarkAll}
+              disabled={busy === 'all'}
               className="text-[10px] font-bold tracking-wider px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-cyan-400"
             >
               MARK ALL READ
@@ -139,6 +147,7 @@ export function NotificationsClient({
               <NotificationCard
                 key={n.id}
                 n={n}
+                busy={busy === n.id}
                 onRead={() => handleRead(n.id)}
               />
             ))}
@@ -149,7 +158,7 @@ export function NotificationsClient({
   )
 }
 
-function NotificationCard({ n, onRead }: { n: Notification; onRead: () => void }) {
+function NotificationCard({ n, busy, onRead }: { n: Notification; busy: boolean; onRead: () => void }) {
   const priorityStyles = {
     low: 'border-white/5',
     normal: 'border-white/10',
@@ -161,12 +170,13 @@ function NotificationCard({ n, onRead }: { n: Notification; onRead: () => void }
 
   return (
     <button
-      onClick={() => !n.is_read && onRead()}
+      onClick={() => !n.is_read && !busy && onRead()}
+      disabled={busy}
       className={`w-full text-left rounded-xl border p-3 transition ${
         n.is_read
-          ? 'bg-[#0e0e15] border-white/5'
-          : `bg-[#12121a] ${priorityStyles[n.priority]}`
-      }`}
+          ? 'bg-[#0e0e15] border-white/5 opacity-60'
+          : `bg-[#12121a] ${priorityStyles[n.priority]} hover:border-cyan-500/40`
+      } ${busy ? 'opacity-50' : ''}`}
     >
       <div className="flex gap-3">
         <div className="text-2xl shrink-0">{icon}</div>
@@ -176,7 +186,7 @@ function NotificationCard({ n, onRead }: { n: Notification; onRead: () => void }
               {n.title}
             </div>
             {!n.is_read && (
-              <div className="w-2 h-2 rounded-full bg-cyan-400 shrink-0 mt-1.5" />
+              <div className="w-2 h-2 rounded-full bg-cyan-400 shrink-0 mt-1.5 animate-pulse" />
             )}
           </div>
           {n.body && (
@@ -187,6 +197,11 @@ function NotificationCard({ n, onRead }: { n: Notification; onRead: () => void }
           <div className="text-[10px] text-gray-500 mt-2">
             {formatDateTime(n.created_at)}
           </div>
+          {!n.is_read && (
+            <div className="text-[10px] text-cyan-400 font-bold mt-1">
+              {busy ? 'Marking...' : 'Tap to mark as read'}
+            </div>
+          )}
         </div>
       </div>
     </button>
