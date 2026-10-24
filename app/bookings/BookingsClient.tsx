@@ -1,10 +1,9 @@
 // app/bookings/BookingsClient.tsx
 'use client'
 
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
-import { useRouter } from 'next/navigation'
 import { formatINR, calcCancellation, calcAmount } from '@/lib/utils/money'
 import {
   formatTime, formatDate, formatDateShort, formatDateTime,
@@ -17,7 +16,7 @@ import { ConfirmActionModal } from '@/components/ui/ConfirmActionModal'
 import { BlockedActionModal } from '@/components/ui/BlockedActionModal'
 import { toast } from '@/components/ui/Toast'
 import { cancelBooking, rescheduleBooking } from '@/lib/actions/bookings'
-import { QRCodeSVG } from 'qrcode.react'
+import { generateCheckinCode } from '@/lib/actions/scan'
 
 type Tab = 'upcoming' | 'past'
 
@@ -45,6 +44,7 @@ type Booking = {
   actual_end_at: string | null
   overrun_min: number
   overrun_charged: number
+  booking_code: string | null
   game: { id: string; name: string; image_url: string | null } | null
   console: { id: string; name: string; type: string; joysticks: number } | null
 }
@@ -59,23 +59,31 @@ interface Props {
 export function BookingsClient({ bookings, settings, walletBalance, timeCredit }: Props) {
   const [tab, setTab] = useState<Tab>('upcoming')
   const [local, setLocal] = useState(bookings)
-  const [now, setNow] = useState(0)
-  const [activeQrBooking, setActiveQrBooking] = useState<Booking | null>(null)
+  const [now, setNow] = useState(0) // 👈 Fix for Next.js error
+  const [activeCodeBooking, setActiveCodeBooking] = useState<Booking | null>(null)
+  const [showSuccess, setShowSuccess] = useState(false)
 
   useEffect(() => {
-    setNow(Date.now())
+    setNow(Date.now()) // 👈 Set current time after mount
     const t = setInterval(() => setNow(Date.now()), 30000)
     return () => clearInterval(t)
   }, [])
 
-  // Realtime updates
   useEffect(() => {
     const supabase = createClient()
     const channel = supabase
       .channel(`customer-bookings-${Math.random().toString(36).slice(2)}`)
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'bookings', filter: `user_id=eq.${bookings[0]?.user_id ?? ''}` },
-        async () => {
+        async (payload) => {
+          if (payload.new && (payload.new as any).status === 'active' && activeCodeBooking) {
+            if ((payload.new as any).id === activeCodeBooking.id) {
+              setActiveCodeBooking(null)
+              setShowSuccess(true)
+              setTimeout(() => setShowSuccess(false), 5000)
+            }
+          }
+
           const { data } = await supabase
             .from('bookings')
             .select(`
@@ -86,6 +94,7 @@ export function BookingsClient({ bookings, settings, walletBalance, timeCredit }
               status, cancel_reason,
               rescheduled_from, rescheduled_to, reschedule_count,
               actual_start_at, actual_end_at, overrun_min, overrun_charged,
+              booking_code,
               game:games(id, name, image_url),
               console:consoles(id, name, type, joysticks)
             `)
@@ -97,7 +106,7 @@ export function BookingsClient({ bookings, settings, walletBalance, timeCredit }
       )
       .subscribe()
     return () => { supabase.removeChannel(channel) }
-  }, [bookings])
+  }, [bookings, activeCodeBooking])
 
   const upcoming = useMemo(
     () => local.filter((b) => ['pending', 'confirmed', 'active'].includes(b.status)),
@@ -181,25 +190,180 @@ export function BookingsClient({ bookings, settings, walletBalance, timeCredit }
                 onUpdate={(updated) => {
                   setLocal((prev) => prev.map((x) => (x.id === updated.id ? updated : x)))
                 }}
-                onQrClick={() => setActiveQrBooking(b)}
+                onCodeClick={() => setActiveCodeBooking(b)}
               />
             ))}
           </div>
         )}
       </main>
 
-      {activeQrBooking && (
-        <CheckinModal
-          booking={activeQrBooking}
-          onClose={() => setActiveQrBooking(null)}
+      {activeCodeBooking && (
+        <CheckinCodeModal
+          booking={activeCodeBooking}
+          onClose={() => setActiveCodeBooking(null)}
         />
+      )}
+
+      {showSuccess && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
+          <div className="bg-[#0a0a0f] border border-green-500/30 rounded-2xl p-8 text-center animate-in zoom-in-95 duration-500">
+            <div className="text-7xl mb-4 animate-bounce drop-shadow-[0_0_15px_rgba(74,222,128,0.5)]">🎉</div>
+            <div className="text-2xl font-black text-green-400 tracking-widest mb-1">
+              SESSION STARTED
+            </div>
+            <p className="text-xs text-green-300/70">Gameplay has begun. Enjoy!</p>
+          </div>
+        </div>
       )}
     </div>
   )
 }
 
+function CheckinCodeModal({ booking, onClose }: { booking: Booking, onClose: () => void }) {
+  const [code, setCode] = useState<string | null>(null)
+  const [otp, setOtp] = useState<string | null>(null)
+  const [expiresAt, setExpiresAt] = useState<number | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [timeLeft, setTimeLeft] = useState(0)
+  const [locationError, setLocationError] = useState<string | null>(null)
+  
+  const hasFetched = useRef(false)
+
+  const fetchNewCode = async () => {
+    setLoading(true)
+    setLocationError(null)
+
+    if (!navigator.geolocation) {
+      setLocationError('Geolocation is not supported by your browser.')
+      setLoading(false)
+      return
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        try {
+          const res = await generateCheckinCode(
+            booking.id,
+            position.coords.latitude,
+            position.coords.longitude
+          )
+          setCode(res.code)
+          setOtp(null)
+          setExpiresAt(new Date(res.expires_at).getTime())
+          setTimeLeft(Math.max(0, Math.floor((new Date(res.expires_at).getTime() - Date.now()) / 1000)))
+        } catch (e: any) {
+          setLocationError(e.message || 'Failed to generate code')
+          setCode(null)
+          setOtp(null)
+        } finally {
+          setLoading(false)
+        }
+      },
+      (error) => {
+        setLocationError('Location access denied. Please allow location to check-in.')
+        setLoading(false)
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    )
+  }
+
+  useEffect(() => {
+    if (hasFetched.current) return;
+    hasFetched.current = true;
+    
+    fetchNewCode()
+  }, [])
+
+  useEffect(() => {
+    const supabase = createClient()
+    const channel = supabase
+      .channel(`otp-${booking.id}-${Math.random().toString(36).slice(2)}`)
+      .on('postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'scan_challenges', filter: `booking_id=eq.${booking.id}` },
+        (payload) => {
+          if (payload.new && (payload.new as any).otp_code) {
+            setOtp((payload.new as any).otp_code)
+          }
+        }
+      )
+      .subscribe()
+
+    return () => { supabase.removeChannel(channel) }
+  }, [booking.id])
+
+  useEffect(() => {
+    if (!expiresAt) return
+    
+    const t = setInterval(() => {
+      const left = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000))
+      setTimeLeft(left)
+      
+      if (left === 0) {
+        clearInterval(t)
+        fetchNewCode() 
+      }
+    }, 1000)
+    
+    return () => clearInterval(t)
+  }, [expiresAt])
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
+      <div className="w-full max-w-sm rounded-2xl border border-cyan-500/40 bg-[#12121a] p-6 shadow-2xl text-center relative">
+        <button onClick={onClose} className="absolute top-3 right-3 text-gray-400 hover:text-white text-xl">✕</button>
+        
+        <h2 className="text-lg font-bold text-white mb-1">Check-in Details</h2>
+        <p className="text-xs text-gray-400 mb-6">Show this to Play Zone staff</p>
+        
+        {locationError ? (
+          <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-sm">
+            <p>{locationError}</p>
+            <button
+              onClick={fetchNewCode}
+              className="mt-3 px-4 py-2 bg-red-500/20 rounded-lg hover:bg-red-500/30 transition text-xs font-bold"
+            >
+              Retry
+            </button>
+          </div>
+        ) : code ? (
+          <div className="space-y-4">
+            <div className="p-3 rounded-xl bg-cyan-500/10 border border-cyan-500/30">
+              <div className="text-[10px] text-cyan-300 font-bold uppercase tracking-wider mb-1">Booking ID</div>
+              <div className="text-3xl font-black text-white tracking-[0.2em] tabular-nums">
+                {code}
+              </div>
+            </div>
+
+            {otp && (
+              <div className="p-3 rounded-xl bg-green-500/10 border border-green-500/30 animate-in fade-in zoom-in duration-300">
+                <div className="text-[10px] text-green-300 font-bold uppercase tracking-wider mb-1">Verification Code</div>
+                <div className="text-2xl font-black text-white tracking-[0.2em] tabular-nums">
+                  {otp}
+                </div>
+              </div>
+            )}
+            
+            <div className="text-[11px] text-green-400 mt-2 font-bold flex items-center justify-center gap-1">
+              <span>⏱</span> Refreshes in {timeLeft}s
+            </div>
+          </div>
+        ) : (
+          <div className="py-10">
+            <div className="w-8 h-8 border-4 border-cyan-500/30 border-t-cyan-500 rounded-full animate-spin mx-auto mb-3"></div>
+            <p className="text-xs text-cyan-300 animate-pulse">Checking location & generating code...</p>
+          </div>
+        )}
+        
+        <div className="mt-4 text-[10px] text-gray-500">
+          Code auto-refreshes every 30 seconds.
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function BookingCard({
-  booking, settings, walletBalance, timeCredit, now, onUpdate, onQrClick,
+  booking, settings, walletBalance, timeCredit, now, onUpdate, onCodeClick,
 }: {
   booking: Booking
   settings: any
@@ -207,7 +371,7 @@ function BookingCard({
   timeCredit: number
   now: number
   onUpdate: (b: Booking) => void
-  onQrClick: () => void
+  onCodeClick: () => void
 }) {
   const [cancelOpen, setCancelOpen] = useState(false)
   const [rescheduleOpen, setRescheduleOpen] = useState(false)
@@ -216,6 +380,10 @@ function BookingCard({
 
   const startDate = new Date(booking.slot_start)
   const endDate = new Date(booking.slot_end)
+
+  // 👈 Expired Check: Slot end time ayyipoyinda?
+  const nowDate = new Date(now)
+  const isExpired = nowDate.getTime() > endDate.getTime()
 
   const cutoffHours = settings.cutoff_hours as number
   const cancelable = canCancel(booking as any, cutoffHours, new Date(now))
@@ -262,10 +430,6 @@ function BookingCard({
   const feePct = settings.cancellation_fee_pct as number
   const { fee, refund } = calcCancellation(booking.amount, feePct)
 
-  const checkinUrl = typeof window !== 'undefined' 
-    ? `${window.location.origin}/checkin/${booking.id}` 
-    : `/checkin/${booking.id}`;
-
   return (
     <div className="bg-gradient-to-br from-[#12121a] to-[#0a0a0f] border border-cyan-500/20 rounded-2xl overflow-hidden shadow-xl">
       
@@ -285,7 +449,14 @@ function BookingCard({
             {formatDate(booking.slot_start)} • {formatTimeRange(booking.slot_start, booking.slot_end)}
           </div>
         </div>
-        <StatusBadge status={booking.status} />
+        {/* 👈 Show EXPIRED badge if slot ended */}
+        {isExpired && booking.status === 'confirmed' ? (
+          <span className="text-[9px] font-black tracking-wider px-2 py-1 rounded-full border shrink-0 bg-red-500/10 border-red-500/40 text-red-300">
+            EXPIRED
+          </span>
+        ) : (
+          <StatusBadge status={booking.status} />
+        )}
       </div>
 
       <div className="p-4 flex gap-4">
@@ -305,25 +476,21 @@ function BookingCard({
             <span className="text-cyan-400 font-bold">{formatINR(booking.amount)}</span>
           </div>
         </div>
-
-        {['confirmed', 'pending'].includes(booking.status) && (
-          <button 
-            onClick={onQrClick}
-            type="button"
-            className="w-24 h-24 bg-white rounded-lg p-1 shrink-0 flex flex-col items-center justify-center hover:ring-4 ring-cyan-500/50 transition cursor-pointer"
-            title="Click to enlarge"
-          >
-            <QRCodeSVG value={checkinUrl} size={80} />
-            <div className="text-[8px] text-black font-bold mt-1">Tap to scan</div>
-          </button>
-        )}
       </div>
 
-      <div className="px-4 pb-2 text-[10px] text-gray-600 font-mono">
-        Booking ID: #{booking.id.slice(0, 8).toUpperCase()}
+      <div className="px-4 pb-4 flex items-center justify-between border-b border-white/5">
+        <div className="text-[10px] text-gray-500 font-mono">
+          Ref: #{booking.id.slice(0, 6).toUpperCase()}
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-gray-500">Entry ID:</span>
+          <div className="text-sm font-black text-cyan-300 bg-cyan-500/10 px-3 py-1 rounded-lg border border-cyan-500/20 tracking-wider">
+            {booking.booking_code || 'N/A'}
+          </div>
+        </div>
       </div>
 
-      <div className="px-4 pb-4 space-y-2">
+      <div className="px-4 py-4 space-y-2">
         {booking.status === 'cancelled' && (
           <div className="rounded-lg bg-red-500/5 border border-red-500/20 p-2 text-[11px] text-red-300 space-y-0.5">
             <div>Cancelled — {formatINR(booking.cancellation_fee)} fee</div>
@@ -343,8 +510,15 @@ function BookingCard({
           </div>
         )}
 
+        {/* 👈 Expired Message */}
+        {isExpired && booking.status === 'confirmed' && (
+          <div className="rounded-lg bg-red-500/10 border border-red-500/30 p-2 text-[11px] text-red-300">
+            Booking expired. This slot is no longer valid.
+          </div>
+        )}
+
         {booking.status === 'active' && (
-          <ActiveSessionTimer slotEnd={booking.slot_end} slotStart={booking.slot_start} />
+          <ActiveSessionTimer slotEnd={booking.slot_end} actualStartAt={booking.actual_start_at} />
         )}
 
         {booking.overrun_charged > 0 && (
@@ -354,7 +528,7 @@ function BookingCard({
         )}
       </div>
 
-      {['pending', 'confirmed'].includes(booking.status) && (
+      {['pending', 'confirmed'].includes(booking.status) && !isExpired && (
         <div className="p-3 border-t border-white/5 flex gap-2">
           <button
             onClick={handleCancelClick}
@@ -369,6 +543,13 @@ function BookingCard({
             className="flex-1 py-2 rounded-lg border border-cyan-500/40 text-cyan-300 text-xs font-bold hover:bg-cyan-500/10 transition"
           >
             Reschedule
+          </button>
+          
+          <button
+            onClick={onCodeClick}
+            className="flex-1 py-2 rounded-lg bg-gradient-to-r from-green-500 to-cyan-500 text-white text-xs font-bold transition hover:opacity-90"
+          >
+            Check-in Code
           </button>
         </div>
       )}
@@ -426,73 +607,6 @@ function BookingCard({
   )
 }
 
-function CheckinModal({ booking, onClose }: { booking: Booking, onClose: () => void }) {
-  const [code, setCode] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
-
-  const checkinUrl = typeof window !== 'undefined' 
-    ? `${window.location.origin}/checkin/${booking.id}` 
-    : `/checkin/${booking.id}`;
-
-  useEffect(() => {
-    const supabase = createClient()
-    const channel = supabase
-      .channel(`checkin-code-${booking.id}-${Math.random().toString(36).slice(2)}`)
-      .on('postgres_changes',
-        { event: '*', schema: 'public', table: 'scan_challenges', filter: `booking_id=eq.${booking.id}` },
-        (payload) => {
-          if (payload.new && (payload.new as any).code) {
-            setCode((payload.new as any).code)
-            setLoading(false)
-          }
-        }
-      )
-      .subscribe()
-
-    return () => { supabase.removeChannel(channel) }
-  }, [booking.id])
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
-      <div className="w-full max-w-sm rounded-2xl border border-cyan-500/40 bg-[#12121a] p-6 shadow-2xl text-center relative">
-        <button 
-          onClick={onClose}
-          className="absolute top-3 right-3 text-gray-400 hover:text-white text-xl"
-        >
-          ✕
-        </button>
-        
-        <h2 className="text-lg font-bold text-white mb-1">Check-in QR</h2>
-        <p className="text-xs text-gray-400 mb-6">Scan at the Play Zone counter</p>
-        
-        <div className="bg-white p-3 rounded-xl inline-block mb-4 shadow-lg">
-          <QRCodeSVG value={checkinUrl} size={200} />
-        </div>
-
-        {code ? (
-          <div className="mt-4 p-4 rounded-xl bg-green-500/10 border border-green-500/30">
-            <div className="text-xs text-green-300 font-bold uppercase tracking-wider mb-1">Verification Code</div>
-            <div className="text-4xl font-black text-white tracking-[0.2em] tabular-nums">
-              {code}
-            </div>
-            <div className="text-[10px] text-green-400 mt-2">Show this code to Play Zone staff</div>
-          </div>
-        ) : (
-          <div className="mt-4 p-3 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center gap-2">
-            {loading ? (
-              <span className="text-xs text-cyan-300 animate-pulse">Generating secure code...</span>
-            ) : (
-              <span className="text-xs text-cyan-300 animate-pulse">
-                Please wait, Play Zone is verifying your check-in...
-              </span>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, { bg: string; label: string }> = {
     pending: { bg: 'bg-yellow-500/10 border-yellow-500/40 text-yellow-300', label: 'PENDING' },
@@ -511,7 +625,7 @@ function StatusBadge({ status }: { status: string }) {
   )
 }
 
-function ActiveSessionTimer({ slotStart, slotEnd }: { slotStart: string; slotEnd: string }) {
+function ActiveSessionTimer({ actualStartAt, slotEnd }: { actualStartAt: string | null, slotEnd: string }) {
   const [now, setNow] = useState(0)
 
   useEffect(() => {
@@ -520,11 +634,24 @@ function ActiveSessionTimer({ slotStart, slotEnd }: { slotStart: string; slotEnd
     return () => clearInterval(t)
   }, [])
 
+  if (!actualStartAt) {
+    return (
+      <div className="rounded-lg p-2 text-xs font-mono bg-gray-500/10 text-gray-400">
+        ⏱ Session not started
+      </div>
+    );
+  }
+
+  const startMs = new Date(actualStartAt).getTime()
   const endMs = new Date(slotEnd).getTime()
-  const remaining = endMs - now
-  const isOverrun = remaining < 0
-  const min = Math.floor(Math.abs(remaining) / 60000)
-  const sec = Math.floor((Math.abs(remaining) % 60000) / 1000)
+  
+  const totalDurationMs = endMs - startMs
+  const elapsedMs = now - startMs
+  const remainingMs = totalDurationMs - elapsedMs
+
+  const isOverrun = remainingMs < 0
+  const min = Math.floor(Math.abs(remainingMs) / 60000)
+  const sec = Math.floor((Math.abs(remainingMs) % 60000) / 1000)
 
   return (
     <div className={`rounded-lg p-2 text-xs font-mono ${

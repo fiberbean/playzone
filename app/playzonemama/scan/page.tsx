@@ -1,7 +1,7 @@
 // app/playzonemama/scan/page.tsx
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { scanQR, verifyScanCode, overrideScan } from '@/lib/actions/scan'
 import { toast, playChime } from '@/components/ui/Toast'
 import { formatTime, formatDateShort } from '@/lib/utils/time'
@@ -32,179 +32,55 @@ type Stage =
 
 export default function ScanPage() {
   const [stage, setStage] = useState<Stage>({ kind: 'idle' })
-  const [manualId, setManualId] = useState('')
-  const [code, setCode] = useState('')
+  const [bookingCode, setBookingCode] = useState('')
+  const [otp, setOtp] = useState('')
   const [busy, setBusy] = useState(false)
-  const [cameraError, setCameraError] = useState<string | null>(null)
   const [lastScan, setLastScan] = useState<{
     name: string
     action: string
     time: string
   } | null>(null)
   
-  const scannerRef = useRef<any>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
   const { settings } = useSettings()
 
-  // Init QR Scanner
-  useEffect(() => {
-    if (stage.kind !== 'idle') {
-      if (scannerRef.current) {
-        try { 
-          scannerRef.current.stop().then(() => scannerRef.current.clear()) 
-        } catch (e) {}
-        scannerRef.current = null
-      }
-      return
-    }
-
-    let mounted = true
-    let scanner: any = null
-
-    const initScanner = async () => {
-      // 1. Element check (React Strict mode valla double render avvakunda)
-      const el = document.getElementById('qr-reader')
-      if (!el || el.innerHTML !== '') return;
-
-      // 2. Wait a bit for DOM to fully render
-      setTimeout(async () => {
-        if (!mounted) return
-
-        const el = document.getElementById('qr-reader')
-        if (!el) return
-
-        try {
-          const { Html5Qrcode } = await import('html5-qrcode')
-          
-          if (!mounted) return
-
-          // Clear element before init
-          el.innerHTML = ''
-
-          scanner = new Html5Qrcode('qr-reader')
-          scannerRef.current = scanner
-
-          await scanner.start(
-            { facingMode: 'environment' },
-            { fps: 10, qrbox: { width: 250, height: 250 } },
-            (decodedText: string) => {
-              // Stop scanner immediately on scan
-              scanner.stop().then(() => {
-                scanner.clear()
-              }).catch(() => {})
-              handleQR(decodedText)
-            },
-            () => {} // Ignore frequent scan errors
-          )
-          
-          setCameraError(null)
-        } catch (err: any) {
-          console.error('Scanner init error:', err)
-          if (mounted) {
-            setCameraError('Camera access failed. Please allow camera permissions.')
-          }
-        }
-      }, 300)
-    }
-
-    initScanner()
-
-    return () => {
-      mounted = false
-      if (scanner) {
-        try { 
-          scanner.stop().then(() => {
-            scanner.clear()
-          }).catch(() => {}) 
-        } catch (e) {}
-      }
-      if (scannerRef.current) {
-        try { scannerRef.current.clear() } catch (e) {}
-        scannerRef.current = null
-      }
-    }
-  }, [stage.kind])
-
-  // Native Camera Fallback
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-
+  const handleSearch = async () => {
+    if (!bookingCode.trim()) return
     setBusy(true)
     try {
-      const { Html5Qrcode } = await import('html5-qrcode')
-      let tempDiv = document.getElementById('file-scan-temp')
-      if (!tempDiv) {
-        tempDiv = document.createElement('div')
-        tempDiv.id = 'file-scan-temp'
-        tempDiv.style.display = 'none'
-        document.body.appendChild(tempDiv)
-      }
-      const html5QrCode = new Html5Qrcode("file-scan-temp")
-      const decodedText = await html5QrCode.scanFile(file, true)
-      html5QrCode.clear()
-      await handleQR(decodedText)
-    } catch (err: any) {
-      toast.error('Scan failed', 'Could not detect a valid QR code in this image.')
-    } finally {
-      setBusy(false)
-      if (fileInputRef.current) fileInputRef.current.value = ''
-    }
-  }
-
-  const handleQR = async (qrText: string) => {
-    if (busy && stage.kind !== 'idle') return
-    setBusy(true)
-    try {
-      if (scannerRef.current) {
-        try { scannerRef.current.clear() } catch (e) {}
-        scannerRef.current = null
-      }
-      const res = await scanQR(qrText)
+      const res = await scanQR(bookingCode.trim())
       playChime(false)
+      
       setStage({
         kind: 'scanned',
         booking: res.booking as ScannedBooking,
         scanType: res.scanType as 'in' | 'out',
         requireCode: res.requireCode,
       })
-      if (!res.requireCode) {
-        setStage({
-          kind: 'success',
-          booking: res.booking as ScannedBooking,
-          scanType: res.scanType as 'in' | 'out',
-        })
-        setLastScan({
-          name: res.booking.profile?.full_name ?? res.booking.profile?.email ?? '—',
-          action: res.scanType === 'in' ? 'Session started' : 'Session ended',
-          time: new Date().toISOString(),
-        })
-      }
     } catch (e) {
       playChime(true)
-      setStage({ kind: 'error', message: e instanceof Error ? e.message : 'Scan failed' })
+      // 👈 Extract actual error message
+      const msg = e instanceof Error ? e.message : 'Unknown error'
+      
+      // 👈 Show the actual error message as title
+      if (msg.toLowerCase().includes('expired') || msg.toLowerCase().includes('passed')) {
+        toast.error('Booking Expired', msg)
+      } else {
+        toast.error('Search Failed', msg)
+      }
     } finally {
       setBusy(false)
     }
   }
 
-  const handleManual = () => {
-    if (!manualId.trim()) return
-    const payload = manualId.startsWith('playzone://booking/')
-      ? manualId
-      : `playzone://booking/${manualId.trim()}`
-    handleQR(payload)
-  }
-
   const handleVerify = async () => {
     if (stage.kind !== 'scanned') return
-    if (code.length < 4) {
+    if (otp.length < 4) {
       toast.error('Enter 4 digits')
       return
     }
     setBusy(true)
     try {
-      await verifyScanCode(stage.booking.id, code)
+      await verifyScanCode(stage.booking.id, bookingCode, otp)
       playChime(false)
       setStage({ kind: 'success', booking: stage.booking, scanType: stage.scanType })
       setLastScan({
@@ -214,8 +90,9 @@ export default function ScanPage() {
       })
     } catch (e) {
       playChime(true)
-      toast.error('Wrong code', e instanceof Error ? e.message : '')
-      setCode('')
+      const msg = e instanceof Error ? e.message : ''
+      toast.error('Verification failed', msg)
+      setOtp('')
     } finally {
       setBusy(false)
     }
@@ -243,232 +120,203 @@ export default function ScanPage() {
 
   const reset = () => {
     setStage({ kind: 'idle' })
-    setCode('')
-    setManualId('')
-    setCameraError(null)
+    setOtp('')
+    setBookingCode('')
   }
 
   return (
-    <div>
-      {/* Hidden div for file scanning */}
-      <div id="file-scan-temp" className="hidden"></div>
+    <div className="min-h-[80vh] flex flex-col items-center justify-center p-4">
+      <div className="w-full max-w-md">
+        
+        {/* HEADER */}
+        <div className="text-center mb-8 relative z-10">
+          <h2 className="text-3xl sm:text-4xl font-black tracking-widest bg-gradient-to-r from-cyan-400 to-pink-500 bg-clip-text text-transparent drop-shadow-[0_0_15px_rgba(34,211,238,0.3)]">
+            SCAN ID
+          </h2>
+          <p className="text-[10px] text-cyan-300/60 mt-1 tracking-[0.3em] uppercase">
+            Manual Check-in
+          </p>
+        </div>
 
-      <div className="mb-6">
-        <h2 className="text-2xl sm:text-3xl font-black tracking-wider bg-gradient-to-r from-cyan-400 to-pink-500 bg-clip-text text-transparent">
-          SCAN ID
-        </h2>
-        <p className="text-xs text-gray-500 mt-1 tracking-widest">
-          QR CHECK-IN / CHECK-OUT
-        </p>
-      </div>
-
-      {/* IDLE — camera view */}
-      {stage.kind === 'idle' && (
-        <div className="space-y-4">
-          <div className="bg-gradient-to-br from-[#12121a] to-[#0a0a0f] border border-cyan-500/30 rounded-2xl p-4">
-            
-            {/* Scanner Container */}
-            <div className="relative w-full max-w-md mx-auto min-h-[300px] bg-black/50 rounded-xl overflow-hidden mb-4">
-              <div 
-                id="qr-reader" 
-                className="w-full h-full [&>div]:!border-none [&_button]:!bg-gradient-to-r [&_button]:!from-cyan-500 [&_button]:!to-pink-500 [&_button]:!text-white [&_button]:!rounded-lg [&_button]:!font-bold [&_button]:!px-4 [&_button]:!py-2 [&_button]:!my-2 [&_select]:!bg-[#12121a] [&_select]:!text-white [&_select]:!p-2 [&_select]:!rounded-lg"
-              />
+        {/* IDLE — Search View */}
+        {stage.kind === 'idle' && (
+          <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="relative group">
+              <div className="absolute -inset-0.5 bg-gradient-to-r from-cyan-500 to-pink-500 rounded-2xl blur opacity-30 group-hover:opacity-60 transition duration-500"></div>
               
-              {cameraError && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center bg-black/90 z-10">
-                  <div className="text-amber-400 text-4xl mb-2">⚠️</div>
-                  <div className="text-red-400 text-sm font-bold mb-2">
-                    {cameraError}
+              <div className="relative bg-[#12121a] border border-white/10 rounded-2xl p-8 overflow-hidden">
+                <div className="relative z-10">
+                  <div className="flex justify-center mb-6">
+                    <div className="w-16 h-16 rounded-full bg-white/5 flex items-center justify-center">
+                      <span className="text-3xl">⌨️</span>
+                    </div>
+                  </div>
+                  
+                  <h3 className="text-center text-white font-bold text-lg mb-2">Enter Booking ID</h3>
+                  <p className="text-center text-xs text-gray-400 mb-6">Type the 8-digit ID or Entry ID.</p>
+
+                  <div className="space-y-3">
+                    <input
+                      type="text"
+                      value={bookingCode}
+                      onChange={(e) => setBookingCode(e.target.value.toUpperCase())}
+                      onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+                      placeholder="e.g. 12345678 or PZBKID0001"
+                      className="w-full bg-[#0a0a0f] border-2 border-cyan-500/20 rounded-xl px-4 py-4 text-center text-2xl font-mono tracking-[0.3em] text-cyan-300 placeholder-cyan-900 focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_20px_rgba(34,211,238,0.2)] transition-all"
+                      autoFocus
+                    />
+                    
+                    <button
+                      onClick={handleSearch}
+                      disabled={busy || !bookingCode.trim()}
+                      className="w-full py-4 rounded-xl bg-gradient-to-r from-cyan-500 to-pink-500 text-white font-black tracking-wider disabled:opacity-50 transition-all active:scale-95 hover:shadow-[0_0_20px_rgba(236,72,153,0.4)]"
+                    >
+                      {busy ? 'SEARCHING...' : 'SEARCH'}
+                    </button>
                   </div>
                 </div>
-              )}
-            </div>
-
-            {/* Fallback Native Camera Button */}
-            <div className="text-center mt-2">
-              <span className="text-xs text-gray-400 block mb-2">Camera not working?</span>
-              <input
-                type="file"
-                accept="image/*"
-                capture="environment"
-                className="hidden"
-                ref={fileInputRef}
-                onChange={handleFileUpload}
-              />
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 border border-cyan-500/30 text-cyan-300 text-xs font-bold rounded-lg transition"
-              >
-                📸 Take Photo of QR
-              </button>
-            </div>
-          </div>
-
-          <div className="bg-gradient-to-br from-[#12121a] to-[#0a0a0f] border border-cyan-500/20 rounded-2xl p-4">
-            <label className="text-[10px] text-gray-500 tracking-wider">
-              OR ENTER BOOKING ID MANUALLY
-            </label>
-            <div className="flex gap-2 mt-2">
-              <input
-                type="text"
-                value={manualId}
-                onChange={(e) => setManualId(e.target.value)}
-                placeholder="BK-1024 or UUID"
-                className="flex-1 bg-[#0a0a0f] border border-cyan-500/20 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-cyan-500/60"
-              />
-              <button
-                onClick={handleManual}
-                disabled={busy || !manualId.trim()}
-                className="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-pink-500 text-white font-bold text-sm disabled:opacity-50"
-              >
-                Submit
-              </button>
-            </div>
-          </div>
-
-          {lastScan && (
-            <div className="bg-green-500/5 border border-green-500/30 rounded-2xl p-4">
-              <div className="text-[10px] text-green-400 tracking-wider font-bold">
-                ✓ LAST SCAN
-              </div>
-              <div className="mt-1 text-sm text-white font-bold">{lastScan.name}</div>
-              <div className="text-xs text-gray-400">
-                {lastScan.action} • {formatTime(lastScan.time)}
               </div>
             </div>
-          )}
-        </div>
-      )}
 
-      {/* ... (Mee purathana SCANNED, SUCCESS, ERROR UI code alane undandi) ... */}
-      
-      {/* SCANNED — need code */}
-      {stage.kind === 'scanned' && (
-        <div className="bg-gradient-to-br from-[#12121a] to-[#0a0a0f] border border-cyan-500/40 rounded-2xl p-5 space-y-5">
-          <div className="text-center">
-            <div className="text-3xl mb-1">✅</div>
-            <div className="text-xs text-cyan-400 tracking-wider font-bold">
-              QR DETECTED
-            </div>
-          </div>
-
-          <BookingSummary booking={stage.booking} scanType={stage.scanType} />
-
-          {stage.requireCode && (
-            <>
-              <div className="border-t border-cyan-500/20 pt-4">
-                <label className="text-[10px] text-gray-500 tracking-wider block text-center mb-3">
-                  ENTER 4-DIGIT CODE FROM CUSTOMER'S SCREEN
-                </label>
-                <div className="flex justify-center gap-2 mb-3">
-                  {[0, 1, 2, 3].map((i) => (
-                    <input
-                      key={i}
-                      type="tel"
-                      maxLength={1}
-                      value={code[i] ?? ''}
-                      onChange={(e) => {
-                        const v = e.target.value.replace(/\D/g, '')
-                        const arr = code.split('')
-                        arr[i] = v
-                        const next = arr.join('').slice(0, 4)
-                        setCode(next)
-                        if (v && i < 3) {
-                          const nextEl = document.querySelectorAll<HTMLInputElement>('[data-code-input]')[i + 1]
-                          nextEl?.focus()
-                        }
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Backspace' && !code[i] && i > 0) {
-                          const prevEl = document.querySelectorAll<HTMLInputElement>('[data-code-input]')[i - 1]
-                          prevEl?.focus()
-                        }
-                      }}
-                      data-code-input
-                      className="w-14 h-16 text-center text-2xl font-black bg-[#0a0a0f] border border-cyan-500/30 rounded-xl focus:outline-none focus:border-cyan-500"
-                    />
-                  ))}
+            {lastScan && (
+              <div className="bg-[#12121a] border border-green-500/20 rounded-xl p-4 flex items-center justify-between">
+                <div>
+                  <div className="text-[10px] text-green-400 tracking-wider font-bold uppercase">Last Action</div>
+                  <div className="text-sm text-white font-bold">{lastScan.name}</div>
+                  <div className="text-[10px] text-gray-500">{lastScan.action} • {formatTime(lastScan.time)}</div>
                 </div>
+                <div className="w-8 h-8 rounded-full bg-green-500/10 flex items-center justify-center text-green-400">✓</div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* SCANNED — Show Details & Enter OTP */}
+        {stage.kind === 'scanned' && (
+          <div className="relative group animate-in zoom-in-95 duration-300">
+            <div className="absolute -inset-0.5 bg-gradient-to-r from-cyan-500 to-pink-500 rounded-2xl blur opacity-40 group-hover:opacity-60 transition duration-500"></div>
+            
+            <div className="relative bg-[#12121a] border border-white/10 rounded-2xl p-6 shadow-2xl overflow-hidden">
+              
+              <div className="text-center mb-6">
+                <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-green-500/10 mb-3 ring-4 ring-green-500/20">
+                  <span className="text-2xl">✅</span>
+                </div>
+                <div className="text-lg font-black text-white tracking-wide">BOOKING FOUND</div>
+                <p className="text-xs text-gray-400">Verify customer details and enter code.</p>
               </div>
 
-              <div className="flex gap-2">
+              <BookingSummary booking={stage.booking} scanType={stage.scanType} />
+
+              {stage.requireCode && (
+                <div className="mt-6">
+                  <div className="text-center text-[10px] text-gray-500 font-bold tracking-wider mb-3">
+                    ENTER 4-DIGIT CODE FROM CUSTOMER
+                  </div>
+                  
+                  <div className="flex justify-center gap-2 mb-6">
+                    {[0, 1, 2, 3].map((i) => (
+                      <input
+                        key={i}
+                        type="tel"
+                        maxLength={1}
+                        value={otp[i] ?? ''}
+                        onChange={(e) => {
+                          const v = e.target.value.replace(/\D/g, '')
+                          const arr = otp.split('')
+                          arr[i] = v
+                          const next = arr.join('').slice(0, 4)
+                          setOtp(next)
+                          if (v && i < 3) {
+                            const nextEl = document.querySelectorAll<HTMLInputElement>('[data-code-input]')[i + 1]
+                            nextEl?.focus()
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Backspace' && !otp[i] && i > 0) {
+                            const prevEl = document.querySelectorAll<HTMLInputElement>('[data-code-input]')[i - 1]
+                            prevEl?.focus()
+                          }
+                        }}
+                        data-code-input
+                        className={`w-14 h-16 text-center text-3xl font-black rounded-xl border-2 transition-all duration-300 ${
+                          otp[i] 
+                            ? 'bg-cyan-500/20 border-cyan-400 text-white shadow-[0_0_15px_rgba(34,211,238,0.3)]' 
+                            : 'bg-[#0a0a0f] border-white/10 text-cyan-500/50 focus:border-cyan-500'
+                        }`}
+                      />
+                    ))}
+                  </div>
+
+                  <div className="flex gap-3">
+                    <button
+                      onClick={reset}
+                      className="flex-1 py-3 rounded-xl bg-white/5 border border-white/10 text-gray-300 font-bold text-sm hover:bg-white/10 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleVerify}
+                      disabled={busy || otp.length < 4}
+                      className="flex-[2] py-3 rounded-xl bg-gradient-to-r from-cyan-500 to-pink-500 text-white font-black tracking-wider text-sm disabled:opacity-50 transition-all active:scale-95 shadow-[0_0_20px_rgba(34,211,238,0.3)]"
+                    >
+                      {busy ? 'VERIFYING...' : 'VERIFY & START'}
+                    </button>
+                  </div>
+
+                  {(settings?.scan_override_enabled as boolean) && (
+                    <button
+                      onClick={handleOverride}
+                      disabled={busy}
+                      className="w-full mt-4 text-[10px] text-amber-500/70 hover:text-amber-400 tracking-wider font-bold transition-colors"
+                    >
+                      [ ADMIN OVERRIDE ]
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {!stage.requireCode && (
                 <button
                   onClick={reset}
-                  className="flex-1 py-3 rounded-xl bg-white/5 border border-white/10 text-gray-300 font-bold text-sm"
+                  className="w-full mt-4 py-3 rounded-xl bg-gradient-to-r from-green-500 to-emerald-500 text-white font-black tracking-wider text-sm"
                 >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleVerify}
-                  disabled={busy || code.length < 4}
-                  className="flex-1 py-3 rounded-xl bg-gradient-to-r from-cyan-500 to-pink-500 text-white font-bold text-sm disabled:opacity-50"
-                >
-                  {busy ? 'Verifying...' : 'Verify'}
-                </button>
-              </div>
-
-              {(settings.scan_override_enabled as boolean) && (
-                <button
-                  onClick={handleOverride}
-                  disabled={busy}
-                  className="w-full text-[11px] text-amber-400 hover:text-amber-300 py-1 tracking-wider"
-                >
-                  Admin override (reason required)
+                  DONE
                 </button>
               )}
-            </>
-          )}
-
-          {!stage.requireCode && (
-            <button
-              onClick={reset}
-              className="w-full py-3 rounded-xl bg-gradient-to-r from-cyan-500 to-pink-500 text-white font-bold text-sm"
-            >
-              Done
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* SUCCESS */}
-      {stage.kind === 'success' && (
-        <div className="bg-gradient-to-br from-green-500/10 to-[#0a0a0f] border border-green-500/40 rounded-2xl p-6 text-center">
-          <div className="text-5xl mb-3">🎉</div>
-          <div className="text-lg font-black text-green-400 tracking-wider mb-1">
-            {stage.scanType === 'in' ? 'SESSION STARTED' : 'SESSION ENDED'}
+            </div>
           </div>
+        )}
 
-          <div className="mt-4">
-            <BookingSummary booking={stage.booking} scanType={stage.scanType} compact />
+        {/* SUCCESS */}
+        {stage.kind === 'success' && (
+          <div className="relative group animate-in zoom-in-95 duration-500">
+             <div className="absolute -inset-1 bg-green-500 rounded-2xl blur opacity-30 group-hover:opacity-50 transition duration-500 animate-pulse"></div>
+             
+            <div className="relative bg-[#0a0a0f] border border-green-500/30 rounded-2xl p-8 text-center overflow-hidden">
+              <div className="relative z-10">
+                <div className="text-7xl mb-4 animate-bounce drop-shadow-[0_0_15px_rgba(74,222,128,0.5)]">🏆</div>
+                <div className="text-2xl font-black text-green-400 tracking-widest mb-1">
+                  {stage.scanType === 'in' ? 'SESSION STARTED' : 'SESSION ENDED'}
+                </div>
+                <p className="text-xs text-green-300/70 mb-6">Gameplay has begun.</p>
+
+                <div className="bg-green-500/5 border border-green-500/20 rounded-xl p-4 mb-8">
+                  <BookingSummary booking={stage.booking} scanType={stage.scanType} compact />
+                </div>
+
+                <button
+                  onClick={reset}
+                  className="w-full py-4 rounded-xl bg-gradient-to-r from-green-500 to-emerald-500 text-white font-black tracking-wider text-sm shadow-[0_0_30px_rgba(74,222,128,0.3)] transition-all active:scale-95"
+                >
+                  SCAN NEXT
+                </button>
+              </div>
+            </div>
           </div>
+        )}
 
-          <button
-            onClick={reset}
-            className="mt-6 w-full py-3 rounded-xl bg-gradient-to-r from-cyan-500 to-pink-500 text-white font-bold text-sm"
-          >
-            Scan Next
-          </button>
-        </div>
-      )}
-
-      {/* ERROR */}
-      {stage.kind === 'error' && (
-        <div className="bg-gradient-to-br from-red-500/10 to-[#0a0a0f] border border-red-500/40 rounded-2xl p-6 text-center">
-          <div className="text-5xl mb-3">❌</div>
-          <div className="text-base font-black text-red-400 tracking-wider mb-2">
-            SCAN FAILED
-          </div>
-          <p className="text-sm text-gray-300 mb-5">{stage.message}</p>
-
-          <button
-            onClick={reset}
-            className="w-full py-3 rounded-xl bg-gradient-to-r from-cyan-500 to-pink-500 text-white font-bold text-sm"
-          >
-            Try Again
-          </button>
-        </div>
-      )}
+      </div>
     </div>
   )
 }
@@ -481,37 +329,54 @@ function BookingSummary({
   compact?: boolean
 }) {
   return (
-    <div className="bg-[#0a0a0f]/60 rounded-xl p-3 space-y-1 text-sm">
-      <div className="flex items-center gap-2">
+    <div className="bg-[#0a0a0f] rounded-xl p-4 space-y-3 border border-white/5 relative overflow-hidden">
+      <div className={`absolute left-0 top-0 bottom-0 w-1 ${scanType === 'in' ? 'bg-cyan-500' : 'bg-pink-500'}`} />
+      
+      <div className="flex items-center gap-3 pl-2">
         {booking.profile?.avatar_url && (
           <img
             src={booking.profile.avatar_url}
             alt=""
-            className="w-8 h-8 rounded-full"
+            className="w-10 h-10 rounded-full border-2 border-cyan-500/30"
           />
         )}
-        <div className="font-bold text-white">
-          {booking.profile?.full_name ?? booking.profile?.email ?? 'Unknown'}
+        <div>
+          <div className="font-bold text-white text-sm">
+            {booking.profile?.full_name ?? booking.profile?.email ?? 'Unknown'}
+          </div>
+          <div className="text-[10px] text-cyan-400/80 font-mono tracking-wider">
+            #{booking.id.slice(0, 8).toUpperCase()}
+          </div>
         </div>
       </div>
 
-      <div className="text-gray-300">
-        {booking.game?.name ?? '—'} • {booking.console?.name ?? '—'}
-      </div>
+      <div className="pl-2">
+        <div className="text-gray-300 font-bold text-sm">
+          {booking.game?.name ?? '—'} <span className="text-gray-500 text-xs mx-1">•</span> {booking.console?.name ?? '—'}
+        </div>
 
-      <div className="text-xs text-gray-400">
-        {formatDateShort(booking.slot_start)} • {formatTime(booking.slot_start)} – {formatTime(booking.slot_end)}
+        <div className="text-xs text-gray-400 mt-1 flex items-center gap-1">
+          <span>📅</span> {formatDateShort(booking.slot_start)}
+          <span className="mx-1">•</span>
+          <span>⏱</span> {formatTime(booking.slot_start)} – {formatTime(booking.slot_end)}
+        </div>
       </div>
 
       {!compact && (
-        <div className="flex justify-between text-xs pt-2 border-t border-neutral-800">
-          <span className="text-gray-400">👥 {booking.players} players</span>
-          <span className="text-cyan-400 font-bold">{formatINR(booking.amount)}</span>
+        <div className="flex justify-between items-center text-xs pt-3 border-t border-white/5 pl-2">
+          <span className="text-gray-400">Players: <b className="text-white">{booking.players}</b></span>
+          <span className="text-cyan-400 font-bold text-sm">{formatINR(booking.amount)}</span>
         </div>
       )}
 
-      <div className="text-[10px] text-cyan-400 tracking-wider font-bold uppercase pt-1">
-        {scanType === 'in' ? '▶ Check-in' : '⏹ Check-out'}
+      <div className="pl-2 pt-1">
+        <div className={`inline-block text-[9px] tracking-wider font-bold uppercase px-2 py-1 rounded-md ${
+          scanType === 'in' 
+            ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20' 
+            : 'bg-pink-500/10 text-pink-400 border border-pink-500/20'
+        }`}>
+          {scanType === 'in' ? '▶ Action: Check-in' : '⏹ Action: Check-out'}
+        </div>
       </div>
     </div>
   )

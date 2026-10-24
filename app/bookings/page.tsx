@@ -13,24 +13,27 @@ export default async function BookingsPage() {
 
   const settings = await getAllSettings()
 
-  const { data: bookings } = await supabase
+  const { data: bookings, error } = await supabase
     .from('bookings')
     .select(`
       id, user_id, game_id, console_id,
       slot_start, slot_end, duration_min, players,
       hourly_rate_snapshot, rate_type, amount,
       cancellation_fee, reschedule_fee, refund_amount,
-      status, created_at, confirmed_at, started_at, ended_at,
-      cancelled_at, cancel_reason,
-      actual_start_at, actual_end_at, arrival_delta_min,
-      overrun_min, overrun_charged,
+      status, cancel_reason,
       rescheduled_from, rescheduled_to, reschedule_count,
+      actual_start_at, actual_end_at, overrun_min, overrun_charged,
+      booking_code,
       game:games(id, name, image_url),
       console:consoles(id, name, type, joysticks)
     `)
     .eq('user_id', user.id)
     .order('slot_start', { ascending: false })
     .limit(100)
+
+  if (error) {
+    console.error('SERVER: Error fetching bookings:', error)
+  }
 
   const { data: profile } = await supabase
     .from('profiles')

@@ -25,6 +25,11 @@ const SECTIONS: SectionDef[] = [
     keys: ['zone_name', 'zone_upi_id', 'zone_payee_name', 'zone_phone'],
   },
   {
+    title: 'Check-in Security',
+    icon: '📍',
+    keys: ['zone_geofencing_enabled', 'zone_latitude', 'zone_longitude', 'zone_radius_meters'],
+  },
+  {
     title: 'Hours & Slots',
     icon: '⏰',
     keys: [
@@ -35,7 +40,6 @@ const SECTIONS: SectionDef[] = [
   {
     title: 'Policies',
     icon: '📋',
-    // 👇 auto_confirm_bookings add chesanu
     keys: ['auto_confirm_bookings', 'cancellation_fee_pct', 'reschedule_fee_pct', 'cutoff_hours'],
   },
   {
@@ -65,13 +69,17 @@ const LABELS: Record<string, string> = {
   zone_upi_id: 'UPI ID',
   zone_payee_name: 'Payee Name',
   zone_phone: 'Contact Phone',
+  zone_geofencing_enabled: 'Enable Geofencing',
+  zone_latitude: 'Latitude',
+  zone_longitude: 'Longitude',
+  zone_radius_meters: 'Radius (meters)',
   open_hour: 'Open Hour (24h)',
   close_hour: 'Close Hour (24h)',
   slot_minutes: 'Slot Size (min)',
   min_duration_min: 'Min Duration (min)',
   max_duration_min: 'Max Duration (min)',
   advance_days: 'Advance Booking (days)',
-  auto_confirm_bookings: 'Auto-Confirm Bookings', // 👈 Kotha label
+  auto_confirm_bookings: 'Auto-Confirm Bookings',
   cancellation_fee_pct: 'Cancellation Fee %',
   reschedule_fee_pct: 'Reschedule Fee %',
   cutoff_hours: 'Cutoff (hours before start)',

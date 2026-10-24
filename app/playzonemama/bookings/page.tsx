@@ -24,6 +24,7 @@ type Row = {
   duration_min: number
   players: number
   amount: number
+  booking_code: string | null
   status: BookingStatus
   rate_type: 'single' | 'multiplayer'
   created_at: string
@@ -55,12 +56,13 @@ export default function AdminBookingsPage() {
 
   const fetchData = async () => {
     const supabase = createClient()
-    // FIX: Added FK relation for profiles
+    
+    // 👈 FIX: Explicit ga bookings_user_id_fkey vadali
     const { data, error } = await supabase
       .from('bookings')
       .select(`
         id, user_id, game_id, console_id, slot_start, slot_end,
-        duration_min, players, amount, status, rate_type, created_at,
+        duration_min, players, amount, status, rate_type, created_at, booking_code,
         game:games(name),
         console:consoles(name, type),
         profile:profiles!bookings_user_id_fkey(full_name, email)
@@ -227,6 +229,11 @@ function BookingCard({
             <span className="text-[10px] text-gray-500 font-mono">
               #{booking.id.slice(0, 8)}
             </span>
+            {booking.booking_code && (
+              <span className="text-[10px] text-cyan-400 font-bold font-mono bg-cyan-500/10 px-2 py-0.5 rounded">
+                {booking.booking_code}
+              </span>
+            )}
           </div>
 
           <div className="font-bold text-white text-sm sm:text-base">

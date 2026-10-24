@@ -8,10 +8,76 @@ import { confirmBooking, startSession, endSession } from './bookings';
 import { insertWalletTxn } from './wallet';
 import { createNotification } from './notifications';
 
-/**
- * Called when admin scans a QR code.
- * Returns booking + creates a scan_challenge if code is required.
- */
+// 👈 Distance formula
+function getDistanceInMeters(lat1: number, lon1: number, lat2: number, lon2: number) {
+  const R = 6371e3;
+  const φ1 = lat1 * Math.PI / 180;
+  const φ2 = lat2 * Math.PI / 180;
+  const Δφ = (lat2 - lat1) * Math.PI / 180;
+  const Δλ = (lon2 - lon1) * Math.PI / 180;
+
+  const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+            Math.cos(φ1) * Math.cos(φ2) *
+            Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return R * c;
+}
+
+export async function generateCheckinCode(bookingId: string, userLat: number, userLng: number) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Not authenticated');
+
+  const settings = await getAllSettings();
+  const geofencingEnabled = settings.zone_geofencing_enabled === true;
+
+  if (geofencingEnabled) {
+    const zoneLat = Number(settings.zone_latitude ?? 0);
+    const zoneLng = Number(settings.zone_longitude ?? 0);
+    const radius = Number(settings.zone_radius_meters ?? 50);
+
+    const distance = getDistanceInMeters(userLat, userLng, zoneLat, zoneLng);
+    if (distance > radius) {
+      throw new Error(`You are too far from Play Zone (${Math.round(distance)}m away).`);
+    }
+  }
+
+  const { data: booking } = await supabase
+    .from('bookings')
+    .select('status')
+    .eq('id', bookingId)
+    .single();
+
+  if (!booking) throw new Error('Booking not found');
+  
+  const scanType = ['pending', 'confirmed'].includes(booking.status) ? 'in' : 'out';
+
+  await supabase
+    .from('scan_challenges')
+    .delete()
+    .eq('booking_id', bookingId);
+
+  const bookingCode = Math.floor(10000000 + Math.random() * 90000000).toString();
+  const expiresAt = new Date(Date.now() + 30 * 1000).toISOString();
+
+  const { error } = await supabase
+    .from('scan_challenges')
+    .insert({
+      booking_id: bookingId,
+      code: bookingCode,
+      otp_code: null,
+      expires_at: expiresAt,
+      scan_type: scanType,
+      attempts: 0,
+      max_attempts: 3,
+    });
+
+  if (error) throw new Error(error.message);
+
+  return { code: bookingCode, expires_at: expiresAt };
+}
+
 export async function scanQR(qrPayload: string) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -19,23 +85,67 @@ export async function scanQR(qrPayload: string) {
 
   const settings = await getAllSettings();
   const requireCode = settings.scan_require_code as boolean;
-  const codeLen = settings.scan_code_length as number;
-  const expirySec = settings.scan_code_expiry_sec as number;
 
-  // QR format: playzone://booking/{id}  OR  just the uuid
-  const bookingId = qrPayload.startsWith('playzone://booking/')
+  const qrId = qrPayload.startsWith('playzone://booking/')
     ? qrPayload.replace('playzone://booking/', '')
     : qrPayload;
 
-  const { data: booking } = await supabase
-    .from('bookings')
-    .select('*, game:games(name), console:consoles(name), profile:profiles(full_name, avatar_url, email)')
-    .eq('id', bookingId)
-    .single();
+  let booking: any = null;
+  let challenge: any = null;
 
-  if (!booking) throw new Error('Booking not found');
+  // 👈 1. Search by 8-digit code in scan_challenges
+  if (/^\d{8}$/.test(qrId)) {
+    const { data: c } = await supabase
+      .from('scan_challenges')
+      .select('*, booking_id')
+      .eq('code', qrId)
+      .is('verified_at', null)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-  // Determine scan type based on current status
+    challenge = c;
+
+    if (challenge) {
+      const { data: b } = await supabase
+        .from('bookings')
+        .select('*, game:games(name), console:consoles(name), profile:profiles!bookings_user_id_fkey(full_name, avatar_url, email)')
+        .eq('id', challenge.booking_id)
+        .single();
+      if (b) booking = b;
+    }
+  }
+
+  // 👈 2. Search by PZBKID or UUID in bookings
+  if (!booking) {
+    if (qrId.startsWith('PZBKID')) {
+      const { data: b } = await supabase
+        .from('bookings')
+        .select('*, game:games(name), console:consoles(name), profile:profiles!bookings_user_id_fkey(full_name, avatar_url, email)')
+        .eq('booking_code', qrId.toUpperCase())
+        .maybeSingle();
+      if (b) booking = b;
+    } else if (!/^\d{8}$/.test(qrId)) {
+      const { data: b } = await supabase
+        .from('bookings')
+        .select('*, game:games(name), console:consoles(name), profile:profiles!bookings_user_id_fkey(full_name, avatar_url, email)')
+        .eq('id', qrId)
+        .maybeSingle();
+      if (b) booking = b;
+    }
+  }
+
+  if (!booking) throw new Error('Booking not found. Please check the code.');
+
+  // 👈 3. Late Arrival Rule (12 hours grace) with "Booking Expired" message
+  const now = new Date();
+  const slotDate = new Date(booking.slot_start);
+  const hoursSinceBooking = (now.getTime() - slotDate.getTime()) / (1000 * 60 * 60);
+  
+  if (hoursSinceBooking > 12) {
+    throw new Error('Booking Expired. This slot is no longer valid.');
+  }
+
   let scanType: 'in' | 'out';
   if (booking.status === 'pending' || booking.status === 'confirmed') {
     scanType = 'in';
@@ -46,51 +156,40 @@ export async function scanQR(qrPayload: string) {
   }
 
   if (!requireCode) {
-    // Direct action
     await executeScan(booking, scanType, 'qr');
     return { booking, scanType, requireCode: false };
   }
 
-  // Generate code
-  const code = generateCode(codeLen);
-  const expiresAt = new Date(Date.now() + expirySec * 1000).toISOString();
+  // 👈 Generate OTP for this challenge
+  const otpCode = Math.floor(1000 + Math.random() * 9000).toString();
+  
+  if (challenge) {
+    await supabase
+      .from('scan_challenges')
+      .update({ otp_code: otpCode })
+      .eq('id', challenge.id);
+  } else {
+    await supabase
+      .from('scan_challenges')
+      .insert({
+        booking_id: booking.id,
+        code: qrId,
+        otp_code: otpCode,
+        expires_at: new Date(Date.now() + 30 * 1000).toISOString(),
+        scan_type: scanType,
+        attempts: 0,
+        max_attempts: 3,
+      });
+  }
 
-  await supabase.from('scan_challenges').insert({
-    booking_id: booking.id,
-    scan_type: scanType,
-    code,
-    expires_at: expiresAt,
-    max_attempts: settings.scan_code_max_attempts as number,
-  });
-
-  // Push to customer via Realtime (they read from scan_challenges subscription)
-  await createNotification({
-    user_id: booking.user_id,
-    type: 'system',
-    title: '🔑 Check-in code',
-    body: `Show code to admin: ${code}`,
-    booking_id: booking.id,
-    priority: 'urgent',
-    channels: ['in_app', 'sound'],
-  });
-
-  return {
-    booking,
-    scanType,
-    requireCode: true,
-    challengeId: null, // client fetches latest challenge
-  };
+  return { booking, scanType, requireCode: true };
 }
 
-/**
- * Verify the 4-digit code entered by admin.
- */
-export async function verifyScanCode(bookingId: string, enteredCode: string) {
+export async function verifyScanCode(bookingId: string, enteredBookingCode: string, enteredOtp: string) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Not authenticated');
 
-  // Get latest unverified challenge
   const { data: challenge } = await supabase
     .from('scan_challenges')
     .select('*')
@@ -100,29 +199,24 @@ export async function verifyScanCode(bookingId: string, enteredCode: string) {
     .limit(1)
     .single();
 
-  if (!challenge) throw new Error('No active code. Rescan QR.');
+  if (!challenge) throw new Error('No active code. Ask customer to refresh.');
 
   if (new Date(challenge.expires_at) < new Date()) {
-    throw new Error('Code expired. Please rescan.');
+    throw new Error('Code expired. Ask customer to refresh.');
   }
 
-  if (challenge.attempts >= challenge.max_attempts) {
-    throw new Error('Too many attempts. Please rescan.');
+  if (challenge.code !== enteredBookingCode) {
+    throw new Error('Wrong Booking ID. Please check again.');
   }
 
-  if (challenge.code !== enteredCode) {
-    await supabase.from('scan_challenges')
-      .update({ attempts: challenge.attempts + 1 })
-      .eq('id', challenge.id);
-    throw new Error(`Wrong code. ${challenge.max_attempts - challenge.attempts - 1} tries left.`);
+  if (challenge.otp_code !== enteredOtp) {
+    throw new Error('Wrong Verification Code. Please check again.');
   }
 
-  // Mark verified
   await supabase.from('scan_challenges').update({
     verified_at: new Date().toISOString(),
   }).eq('id', challenge.id);
 
-  // Load booking
   const { data: booking } = await supabase
     .from('bookings').select('*').eq('id', bookingId).single();
   if (!booking) throw new Error('Booking not found');
@@ -134,7 +228,6 @@ export async function verifyScanCode(bookingId: string, enteredCode: string) {
   return { success: true };
 }
 
-/** Admin manual override (with reason) */
 export async function overrideScan(bookingId: string, scanType: 'in' | 'out', reason: string) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -155,7 +248,6 @@ export async function overrideScan(bookingId: string, scanType: 'in' | 'out', re
   await executeScan(booking, scanType, 'override');
 }
 
-/** Internal: run the actual in/out logic */
 async function executeScan(
   booking: { id: string; status: string; user_id: string; amount: number },
   scanType: 'in' | 'out',
@@ -179,10 +271,4 @@ async function executeScan(
     scan_type: scanType,
     method,
   });
-}
-
-function generateCode(len: number): string {
-  let code = '';
-  for (let i = 0; i < len; i++) code += Math.floor(Math.random() * 10);
-  return code;
 }

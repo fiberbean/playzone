@@ -17,7 +17,7 @@ export interface CreateBookingInput {
   slot_start: string; // ISO
   duration_min: number;
   players: number;
-  amount: number; // 👈 Added: UI nunchi total amount pass avuthundi
+  amount: number;
   notes?: string;
 }
 
@@ -31,7 +31,6 @@ export async function createBooking(input: CreateBookingInput) {
   const maxDur = settings.max_duration_min as number;
   const slotMin = settings.slot_minutes as number;
   
-  // Auto-confirm setting check
   const autoConfirm = settings.auto_confirm_bookings === true;
 
   // Validate duration
@@ -70,6 +69,19 @@ export async function createBooking(input: CreateBookingInput) {
   const rateType = input.players === 1 ? 'single' : 'multiplayer';
   const hourly_rate_snapshot = amount / (input.duration_min / 60);
 
+  // 👈 Generate Booking Code (Try RPC, fallback to random)
+  let finalCode = '';
+  try {
+    const { data, error } = await supabase.rpc('get_next_booking_code');
+    if (error || !data) {
+      throw new Error('RPC failed');
+    }
+    finalCode = data;
+  } catch (err) {
+    // Fallback: Generate a random code if RPC fails
+    finalCode = `PZBKID${Math.floor(1000 + Math.random() * 9000)}`;
+  }
+
   const slotStart = new Date(input.slot_start);
   const slotEnd = new Date(slotStart.getTime() + input.duration_min * 60 * 1000);
 
@@ -104,6 +116,7 @@ export async function createBooking(input: CreateBookingInput) {
       status: 'pending',
       created_by: user.id,
       notes: input.notes ?? null,
+      booking_code: finalCode,
     })
     .select()
     .single();
@@ -118,7 +131,6 @@ export async function createBooking(input: CreateBookingInput) {
   // ✅ AUTO-CONFIRM LOGIC
   if (autoConfirm) {
     try {
-      // Wallet nunchi amount cut cheddam
       const txn = await insertWalletTxn({
         user_id: user.id,
         type: 'debit',
@@ -136,27 +148,23 @@ export async function createBooking(input: CreateBookingInput) {
         },
       });
 
-      // Wallet cut ayyaka confirm cheyadam
       await supabase.from('bookings')
         .update({ status: 'confirmed', confirmed_at: new Date().toISOString() })
         .eq('id', booking.id);
 
-      // Notification pampadam
       await createNotification({
         user_id: user.id,
         type: 'booking_confirmed',
-        title: '✅ Booking Auto-Confirmed',
+        title: '✅ Booking Confirmed',
         body: `₹${amount} debited instantly. See you at ${formatTime(slotStart)}.`,
         booking_id: booking.id,
         wallet_txn_id: txn.id,
         priority: 'high',
       });
 
-      // Local booking data update
       booking.status = 'confirmed'; 
 
     } catch (e) {
-      // Balance saripokapothe error handling
       await supabase.from('bookings').update({ 
         status: 'cancelled', 
         cancel_reason: 'Auto-confirm failed: Insufficient balance' 
@@ -165,7 +173,6 @@ export async function createBooking(input: CreateBookingInput) {
       throw new Error('Insufficient wallet balance for auto-confirmation. Please recharge and try again.');
     }
   } else {
-    // Auto-confirm OFF unte purathala la pending notification
     await createNotification({
       user_id: user.id,
       type: 'booking_confirmed',
@@ -195,7 +202,6 @@ export async function confirmBooking(bookingId: string) {
   if (!booking) throw new Error('Booking not found');
   if (booking.status !== 'pending') throw new Error('Booking is not pending');
 
-  // Debit wallet via ledger (trigger checks for insufficient balance)
   try {
     const txn = await insertWalletTxn({
       user_id: booking.user_id,
@@ -267,7 +273,6 @@ export async function cancelBooking(bookingId: string, reason?: string) {
     throw new Error('Cannot cancel this booking');
   }
 
-  // Cutoff check
   const cutoffMs = cutoffHours * 60 * 60 * 1000;
   if (Date.now() >= new Date(booking.slot_start).getTime() - cutoffMs) {
     throw new Error(`Cancellation not allowed within ${cutoffHours} hours of start`);
@@ -275,7 +280,6 @@ export async function cancelBooking(bookingId: string, reason?: string) {
 
   const { fee, refund } = calcCancellation(booking.amount, feePct);
 
-  // Only refund if the booking was already charged (confirmed)
   if (booking.status === 'confirmed') {
     const txn = await insertWalletTxn({
       user_id: booking.user_id,
@@ -312,7 +316,6 @@ export async function cancelBooking(bookingId: string, reason?: string) {
       priority: 'normal',
     });
   } else {
-    // Pending → just cancel, no money moved
     await supabase.from('bookings').update({
       status: 'cancelled',
       cancelled_at: new Date().toISOString(),
@@ -364,7 +367,6 @@ export async function rescheduleBooking(
     throw new Error(`Reschedule not allowed within ${cutoffHours} hours`);
   }
 
-  // Compute new amount (using dynamic pricing)
   const perPlayerRate = getPlayerRate(
     old.game?.player_rates as any,
     old.game?.pricing_mode as any,
@@ -380,7 +382,6 @@ export async function rescheduleBooking(
   const newStart = new Date(newSlotStart);
   const newEnd = new Date(newStart.getTime() + newDurationMin * 60 * 1000);
 
-  // 1. Refund old (if it was confirmed — money was charged)
   if (old.status === 'confirmed') {
     await insertWalletTxn({
       user_id: old.user_id,
@@ -400,14 +401,12 @@ export async function rescheduleBooking(
     });
   }
 
-  // 2. Mark old as rescheduled
   await supabase.from('bookings').update({
     status: 'rescheduled',
     reschedule_fee: fee,
     refund_amount: refundFromOld,
   }).eq('id', old.id);
 
-  // 3. Create new booking (pending) - Server-side conflict check
   const { data: conflicts, error: conflictErr } = await supabase
     .from('bookings')
     .select('id')
@@ -421,6 +420,16 @@ export async function rescheduleBooking(
     throw new Error('New slot already booked. Pick another.');
   }
 
+  // 👈 Generate New Booking Code
+  let newCode = '';
+  try {
+    const { data, error } = await supabase.rpc('get_next_booking_code');
+    if (error || !data) throw new Error('RPC failed');
+    newCode = data;
+  } catch (err) {
+    newCode = `PZBKID${Math.floor(1000 + Math.random() * 9000)}`;
+  }
+
   const { data: newBooking, error } = await supabase
     .from('bookings')
     .insert({
@@ -431,7 +440,7 @@ export async function rescheduleBooking(
       slot_end: newEnd.toISOString(),
       duration_min: newDurationMin,
       players: old.players,
-      hourly_rate_snapshot: totalHourlyRate, // Snapshot total hourly rate
+      hourly_rate_snapshot: totalHourlyRate,
       rate_type: old.rate_type,
       amount: newAmount,
       status: 'pending',
@@ -439,6 +448,7 @@ export async function rescheduleBooking(
       rescheduled_from: old.id,
       reschedule_count: (old.reschedule_count ?? 0) + 1,
       notes: old.notes,
+      booking_code: newCode,
     })
     .select()
     .single();
@@ -448,12 +458,10 @@ export async function rescheduleBooking(
     throw error;
   }
 
-  // 4. Link old → new
   await supabase.from('bookings')
     .update({ rescheduled_to: newBooking.id })
     .eq('id', old.id);
 
-  // 5. Notify
   await createNotification({
     user_id: old.user_id,
     type: 'booking_rescheduled',
@@ -468,7 +476,7 @@ export async function rescheduleBooking(
   return newBooking;
 }
 
-// ---------- START SESSION (admin) ----------
+// ---------- START SESSION ----------
 export async function startSession(bookingId: string) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -532,7 +540,6 @@ export async function endSession(bookingId: string, opts?: {
   const overrunMin = opts?.overrunMin ?? 0;
   const overrunCharge = opts?.overrunCharge ?? 0;
 
-  // Charge overrun if any
   if (overrunCharge > 0) {
     await insertWalletTxn({
       user_id: booking.user_id,
@@ -574,8 +581,6 @@ export async function markNoShow(bookingId: string) {
     cancelled_at: new Date().toISOString(),
     cancel_reason: 'No-show',
   }).eq('id', bookingId);
-
-  // No refund — full amount kept (customer didn't show up)
 
   await createNotification({
     user_id: booking.user_id,
