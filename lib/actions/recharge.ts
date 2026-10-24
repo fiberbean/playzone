@@ -22,14 +22,12 @@ export async function submitRecharge(payload: {
 
   const { amount, upi_ref, upi_app, screenshot_url, screenshot_key } = payload
 
-  // ---- Validation (gamer style) ----
   if (!amount || amount <= 0) throw new Error('Set the amount to lock in')
   if (!upi_ref || upi_ref.length < 6)
     throw new Error('UTR looks off — check again')
   if (!screenshot_url || !screenshot_key)
     throw new Error('Drop a screenshot to continue')
 
-  // ---- Duplicate UTR check (recharge_requests) ----
   const { data: existing } = await supabase
     .from('recharge_requests')
     .select('id, status')
@@ -46,7 +44,6 @@ export async function submitRecharge(payload: {
     throw new Error(`This UTR's already on the leaderboard! (${msg})`)
   }
 
-  // ---- Second guard: wallet_transactions note check ----
   const { data: txnExists } = await supabase
     .from('wallet_transactions')
     .select('id')
@@ -58,7 +55,6 @@ export async function submitRecharge(payload: {
     throw new Error("That UTR's already banked!")
   }
 
-  // ---- Insert ----
   const { data: inserted, error } = await supabase
     .from('recharge_requests')
     .insert({
@@ -74,7 +70,6 @@ export async function submitRecharge(payload: {
     .single()
 
   if (error) {
-    // Unique constraint violation (if DB has it)
     if (error.code === '23505') {
       throw new Error("This UTR's already on the leaderboard!")
     }
@@ -118,6 +113,20 @@ export async function approveRecharge(requestId: string) {
   if (request.status !== 'pending')
     throw new Error(`Already ${request.status}`)
 
+  // 👈 1. Get current balance
+  const { data: userProfile, error: balanceErr } = await supabase
+    .from('profiles')
+    .select('wallet_balance')
+    .eq('id', request.user_id)
+    .single()
+
+  if (balanceErr || !userProfile) {
+    throw new Error('User profile not found')
+  }
+
+  const currentBalance = Number(userProfile.wallet_balance ?? 0)
+  const newBalance = currentBalance + request.amount
+
   // ---- Mark approved ----
   const { error: updateErr } = await supabase
     .from('recharge_requests')
@@ -131,12 +140,12 @@ export async function approveRecharge(requestId: string) {
 
   if (updateErr) throw updateErr
 
-  // ---- Credit wallet ----
-  // Note: `trg_wallet_txn_apply` trigger updates profiles.wallet_balance
+  // 👈 2. Insert wallet transaction with balance_after
   const { error: txnErr } = await supabase.from('wallet_transactions').insert({
     user_id: request.user_id,
     type: 'credit',
     amount: request.amount,
+    balance_after: newBalance,
     source: 'recharge',
     reason_short: 'Wallet recharge',
     reason_long: `UPI recharge approved (UTR: ${request.upi_ref})`,
@@ -147,7 +156,6 @@ export async function approveRecharge(requestId: string) {
   })
 
   if (txnErr) {
-    // Rollback approval if txn failed
     await supabase
       .from('recharge_requests')
       .update({
@@ -158,6 +166,17 @@ export async function approveRecharge(requestId: string) {
       .eq('id', requestId)
 
     throw new Error(`Wallet credit failed: ${txnErr.message}`)
+  }
+
+  // 👈 3. Update profile wallet_balance
+  const { error: profileUpdateErr } = await supabase
+    .from('profiles')
+    .update({ wallet_balance: newBalance })
+    .eq('id', request.user_id)
+
+  if (profileUpdateErr) {
+    console.error('Profile update failed:', profileUpdateErr)
+    throw new Error('Failed to update wallet balance')
   }
 
   // ---- Notify customer ----
@@ -192,7 +211,6 @@ export async function rejectRecharge(
   } = await supabase.auth.getUser()
   if (!user) throw new Error('Not signed in')
 
-  // ---- Admin check ----
   const { data: profile } = await supabase
     .from('profiles')
     .select('role')
@@ -204,7 +222,6 @@ export async function rejectRecharge(
   const trimmed = (reason || '').trim()
   if (trimmed.length < 3) throw new Error('Reason is required')
 
-  // ---- Fetch request ----
   const { data: request, error: fetchErr } = await supabase
     .from('recharge_requests')
     .select('id, user_id, amount, upi_ref, status')
@@ -215,7 +232,6 @@ export async function rejectRecharge(
   if (request.status !== 'pending')
     throw new Error(`Already ${request.status}`)
 
-  // ---- Mark rejected ----
   const { error: updateErr } = await supabase
     .from('recharge_requests')
     .update({
@@ -229,7 +245,6 @@ export async function rejectRecharge(
 
   if (updateErr) throw updateErr
 
-  // ---- Notify customer ----
   await supabase.from('notifications').insert({
     user_id: request.user_id,
     type: 'recharge_rejected',

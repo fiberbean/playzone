@@ -72,63 +72,70 @@ export function WalletClient({
   const [rechargeOpen, setRechargeOpen] = useState(false)
   const [selectedTxn, setSelectedTxn] = useState<Txn | null>(null)
 
-  // Realtime updates
+  // 👈 Realtime updates with profile fetch
   useEffect(() => {
     const supabase = createClient()
     const channel = supabase
       .channel(`wallet-live-${Math.random().toString(36).slice(2)}`)
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'wallet_transactions' },
-        (payload) => {
-          const row = payload.new as any
-          if (row?.type) {
-            if (row.type === 'credit') setBalance((b) => b + 0) // refresh below
-            // Reload lightweight
-            ;(async () => {
-              const { data: profile } = await supabase
-                .from('profiles').select('wallet_balance, time_credit_min')
-                .single()
-              if (profile) {
-                setBalance(Number(profile.wallet_balance))
-                setCredit(Number(profile.time_credit_min))
-              }
-              const { data } = await supabase
-                .from('wallet_transactions')
-                .select('id, type, amount, balance_after, source, reason_short, reason_long, booking_id, linked_txn_id, metadata, note, created_at')
-                .order('created_at', { ascending: false })
-                .limit(100)
-              if (data) setTxns(data as any)
-            })()
+        async (payload) => {
+          console.log('Realtime: Wallet transaction changed:', payload)
+          
+          // 👈 Fetch updated profile balance
+          const { data: { user } } = await supabase.auth.getUser()
+          if (user) {
+            const { data: profile } = await supabase
+              .from('profiles')
+              .select('wallet_balance, time_credit_min')
+              .eq('id', user.id)
+              .single()
+            
+            if (profile) {
+              console.log('Realtime: Updating balance to:', profile.wallet_balance)
+              setBalance(Number(profile.wallet_balance))
+              setCredit(Number(profile.time_credit_min))
+            }
           }
+          
+          // 👈 Refresh transactions list
+          const { data } = await supabase
+            .from('wallet_transactions')
+            .select('id, type, amount, balance_after, source, reason_short, reason_long, booking_id, linked_txn_id, metadata, note, created_at')
+            .order('created_at', { ascending: false })
+            .limit(100)
+          if (data) setTxns(data as any)
         }
       )
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'time_credit_ledger' },
-        () => {
-          ;(async () => {
+        async () => {
+          const { data: { user } } = await supabase.auth.getUser()
+          if (user) {
             const { data: profile } = await supabase
-              .from('profiles').select('time_credit_min').single()
+              .from('profiles')
+              .select('time_credit_min')
+              .eq('id', user.id)
+              .single()
             if (profile) setCredit(Number(profile.time_credit_min))
-            const { data } = await supabase
-              .from('time_credit_ledger')
-              .select('id, type, minutes, balance_after, source, note, expires_at, created_at')
-              .order('created_at', { ascending: false })
-              .limit(50)
-            if (data) setTc(data as any)
-          })()
+          }
+          const { data } = await supabase
+            .from('time_credit_ledger')
+            .select('id, type, minutes, balance_after, source, note, expires_at, created_at')
+            .order('created_at', { ascending: false })
+            .limit(50)
+          if (data) setTc(data as any)
         }
       )
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'recharge_requests' },
-        () => {
-          ;(async () => {
-            const { data } = await supabase
-              .from('recharge_requests')
-              .select('id, amount, upi_ref, status, rejection_reason, created_at')
-              .order('created_at', { ascending: false })
-              .limit(20)
-            if (data) setRecharges(data as any)
-          })()
+        async () => {
+          const { data } = await supabase
+            .from('recharge_requests')
+            .select('id, amount, upi_ref, status, rejection_reason, created_at')
+            .order('created_at', { ascending: false })
+            .limit(20)
+          if (data) setRecharges(data as any)
         }
       )
       .subscribe()
@@ -232,12 +239,12 @@ export function WalletClient({
       </main>
 
       <RechargeModal
-  open={rechargeOpen}
-  onClose={() => setRechargeOpen(false)}
-  upiId={settings.zone_upi_id}
-  payeeName={settings.zone_payee_name}
-  zonePhone={settings.zone_phone}
-/>
+        open={rechargeOpen}
+        onClose={() => setRechargeOpen(false)}
+        upiId={settings.zone_upi_id}
+        payeeName={settings.zone_payee_name}
+        zonePhone={settings.zone_phone}
+      />
 
       {selectedTxn && (
         <TxnDrawer txn={selectedTxn} onClose={() => setSelectedTxn(null)} />
@@ -263,7 +270,6 @@ function TabButton({ active, onClick, children }: any) {
 
 function TxnRow({ txn, onSelect }: { txn: Txn; onSelect: () => void }) {
   const isCredit = txn.type === 'credit'
-  const isPending = txn.source === 'booking_reschedule_in' && false // placeholder
   return (
     <button
       onClick={onSelect}
@@ -371,8 +377,6 @@ function Empty({ title, icon }: { title: string; icon: string }) {
   )
 }
 
-// ---------- Transaction detail drawer ----------
-
 function TxnDrawer({ txn, onClose }: { txn: Txn; onClose: () => void }) {
   const isCredit = txn.type === 'credit'
 
@@ -391,7 +395,6 @@ function TxnDrawer({ txn, onClose }: { txn: Txn; onClose: () => void }) {
           <div className="w-6" />
         </div>
 
-        {/* Big amount */}
         <div className="text-center mb-5">
           <div className={`text-4xl font-black mb-1 ${isCredit ? 'text-green-400' : 'text-red-400'}`}>
             {isCredit ? '+' : '−'}{formatINR(txn.amount)}
@@ -401,7 +404,6 @@ function TxnDrawer({ txn, onClose }: { txn: Txn; onClose: () => void }) {
           </div>
         </div>
 
-        {/* Details */}
         <div className="space-y-3">
           {txn.metadata?.rate && (
             <DetailRow

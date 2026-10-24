@@ -20,19 +20,53 @@ interface LedgerInput {
   note?: string;
 }
 
-/**
- * The ONLY way to move money. Never touch profiles.wallet_balance directly.
- * The DB trigger updates balance + sets balance_after.
- */
 export async function insertWalletTxn(input: LedgerInput) {
   const supabase = await createClient();
+
+  // 👈 STEP 1: Profile fetch
+  console.log('STEP 1: Fetching profile for user:', input.user_id)
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('wallet_balance')
+    .eq('id', input.user_id)
+    .single();
+
+  if (profileError || !profile) {
+    console.error('STEP 1 ERROR: Profile fetch failed:', profileError)
+    throw new Error('Profile not found');
+  }
+  console.log('STEP 1 SUCCESS: Profile found:', profile)
+
+  const currentBalance = Number(profile.wallet_balance ?? 0);
+  console.log('STEP 1: Current balance:', currentBalance)
+
+  // 👈 STEP 2: Calculate new balance
+  const newBalance = input.type === 'credit' 
+    ? currentBalance + input.amount 
+    : currentBalance - input.amount;
+  console.log('STEP 2: New balance calculated:', newBalance)
+
+  // 👈 STEP 3: Block negative balance
+  if (newBalance < 0) {
+    console.error('STEP 3 ERROR: Insufficient balance')
+    throw new Error('Insufficient wallet balance');
+  }
+
+  // 👈 STEP 4: Insert transaction
+  console.log('STEP 4: Inserting wallet_transaction with:', {
+    user_id: input.user_id,
+    type: input.type,
+    amount: input.amount,
+    balance_after: newBalance,
+  })
+  
   const { data, error } = await supabase
     .from('wallet_transactions')
     .insert({
       user_id: input.user_id,
       type: input.type,
       amount: input.amount,
-      balance_after: 0, // overwritten by trigger
+      balance_after: newBalance,
       source: input.source,
       booking_id: input.booking_id ?? null,
       recharge_request_id: input.recharge_request_id ?? null,
@@ -46,7 +80,28 @@ export async function insertWalletTxn(input: LedgerInput) {
     .select()
     .single();
 
-  if (error) throw error;
+  if (error) {
+    console.error('STEP 4 ERROR: Insert failed:', error)
+    throw error;
+  }
+  console.log('STEP 4 SUCCESS: Transaction inserted:', data)
+
+  // 👈 STEP 5: Update profile
+  console.log('STEP 5: Updating profile balance to:', newBalance)
+  const { error: updateError } = await supabase
+    .from('profiles')
+    .update({ wallet_balance: newBalance })
+    .eq('id', input.user_id);
+
+  if (updateError) {
+    console.error('STEP 5 ERROR: Profile update failed:', updateError)
+    throw updateError;
+  }
+  console.log('STEP 5 SUCCESS: Profile updated')
+
+  revalidatePath('/wallet');
+  revalidatePath('/playzonemama/wallet');
+
   return data;
 }
 
