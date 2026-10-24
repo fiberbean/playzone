@@ -75,7 +75,7 @@ export function RechargeModal({ open, onClose, upiId, payeeName, zonePhone }: Pr
   const canSubmit =
     amount > 0 && upiRef.length >= 6 && !!screenshotBlob && dateValid && paymentMatched
 
-  const upiDeepLink = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=Play%20Zone&cu=INR`
+  const upiDeepLink = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(payeeName || 'Play Zone')}&cu=INR`
 
   const handleCopyUpi = async () => {
     try {
@@ -202,7 +202,7 @@ export function RechargeModal({ open, onClose, upiId, payeeName, zonePhone }: Pr
               PAY VIA UPI
             </div>
 
-            {/* ---- MOBILE: Open UPI App button ---- */}
+            {/* 👈 MOBILE: Open UPI App button (visible only on mobile) */}
             <div className="md:hidden">
               <a
                 href={upiDeepLink}
@@ -231,7 +231,7 @@ export function RechargeModal({ open, onClose, upiId, payeeName, zonePhone }: Pr
               </div>
             </div>
 
-            {/* ---- DESKTOP: QR (left) + UPI ID + Payee Name (right) ---- */}
+            {/* 👈 DESKTOP: QR + UPI ID (visible only on desktop) */}
             <div className="hidden md:flex gap-3 items-stretch">
               {/* QR code — left */}
               <div className="shrink-0 rounded-xl bg-white p-2.5 shadow-lg shadow-cyan-500/10 flex items-center justify-center">
@@ -613,4 +613,3 @@ export function RechargeModal({ open, onClose, upiId, payeeName, zonePhone }: Pr
     </>
   )
 }
-
